@@ -1,5 +1,5 @@
 PROJECT OVERVIEW (LIVING DOCUMENT)
-Last updated: 2026-03-03 (frontend dashboard + orchestration APIs)
+Last updated: 2026-03-03 (frontend dashboard + orchestration APIs + npm shortcuts)
 
 ==================================================
 TECHNICAL TERMS
@@ -137,6 +137,9 @@ TECHNICAL TERMS
   - cd frontend
   - npm install
   - npm run dev
+- Root npm shortcuts:
+  - npm start (backend)
+  - npm run frontend (frontend dev server)
 
 8) Model Artifacts
 - Stored in MODEL_ARTIFACTS_DIR (default ./artifacts)

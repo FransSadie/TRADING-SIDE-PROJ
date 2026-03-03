@@ -35,6 +35,12 @@ Recommended coverage settings in `.env` for better model training:
 uvicorn app.main:app --reload
 ```
 
+Shortcut:
+
+```bash
+npm start
+```
+
 PowerShell helper:
 
 ```powershell
@@ -49,6 +55,12 @@ On startup, tables are created and the scheduler starts.
 cd frontend
 npm install
 npm run dev
+```
+
+Shortcut from project root:
+
+```bash
+npm run frontend
 ```
 
 Open:
