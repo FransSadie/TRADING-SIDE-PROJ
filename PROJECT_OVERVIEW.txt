@@ -1,5 +1,5 @@
 PROJECT OVERVIEW (LIVING DOCUMENT)
-Last updated: 2026-03-03 (frontend dashboard + orchestration APIs + npm shortcuts)
+Last updated: 2026-03-03 (frontend UX polish + npm shortcuts)
 
 ==================================================
 TECHNICAL TERMS
@@ -46,6 +46,8 @@ TECHNICAL TERMS
   - prediction_logs table captures every API prediction
 - Operator UI layer:
   - Browser dashboard for one-click pipeline actions and live status views
+  - UX controls: action tooltips, confirm prompts, auto-refresh toggles, interval picker,
+    KPI badges, JSON copy actions, prediction-log filters, and persisted tab/ticker state
 
 4) Tables and Their Roles
 - news_articles

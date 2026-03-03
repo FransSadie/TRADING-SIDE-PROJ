@@ -8,11 +8,47 @@ const tabs = [
   { id: "docs", label: "Docs" }
 ];
 
-function JsonBlock({ data }) {
+const STORAGE_KEYS = {
+  activeTab: "market_bot_active_tab",
+  ticker: "market_bot_ticker",
+  autoRefresh: "market_bot_auto_refresh",
+  refreshMs: "market_bot_refresh_ms"
+};
+
+function fmtTime(value) {
+  if (!value) return "never";
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return String(value);
+  }
+}
+
+function JsonBlock({ data, label = "data" }) {
+  const copyJson = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+    } catch {
+      // no-op
+    }
+  };
+
   return (
-    <pre className="overflow-auto rounded-lg border border-line/70 bg-bg/70 p-3 text-xs text-mute">
-      {JSON.stringify(data, null, 2)}
-    </pre>
+    <div>
+      <div className="mb-2 flex items-center justify-between text-xs text-mute">
+        <span>{label}</span>
+        <button
+          className="rounded border border-line px-2 py-1 hover:border-accent/70 hover:text-ink"
+          onClick={copyJson}
+          title={`Copy ${label} JSON`}
+        >
+          Copy
+        </button>
+      </div>
+      <pre className="overflow-auto rounded-lg border border-line/70 bg-bg/70 p-3 text-xs text-mute">
+        {JSON.stringify(data, null, 2)}
+      </pre>
+    </div>
   );
 }
 
@@ -42,10 +78,18 @@ async function api(path, options = {}) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("ops");
-  const [ticker, setTicker] = useState("SPY");
+  const [activeTab, setActiveTab] = useState(localStorage.getItem(STORAGE_KEYS.activeTab) || "ops");
+  const [ticker, setTicker] = useState(localStorage.getItem(STORAGE_KEYS.ticker) || "SPY");
+  const [autoRefresh, setAutoRefresh] = useState(
+    (localStorage.getItem(STORAGE_KEYS.autoRefresh) || "true") === "true"
+  );
+  const [refreshMs, setRefreshMs] = useState(Number(localStorage.getItem(STORAGE_KEYS.refreshMs) || 15000));
+  const [logTickerFilter, setLogTickerFilter] = useState("");
+  const [logPredFilter, setLogPredFilter] = useState("all");
   const [busy, setBusy] = useState({});
   const [messages, setMessages] = useState([]);
+  const [lastError, setLastError] = useState("");
+  const [lastUpdated, setLastUpdated] = useState({});
 
   const [health, setHealth] = useState(null);
   const [dataStatus, setDataStatus] = useState(null);
@@ -65,9 +109,11 @@ export default function App() {
     setBusy((prev) => ({ ...prev, [key]: true }));
     try {
       const data = await fn();
+      setLastError("");
       pushMessage(`${key} completed`, "ok");
       return data;
     } catch (err) {
+      setLastError(`${key}: ${err.message}`);
       pushMessage(`${key} failed: ${err.message}`, "err");
       throw err;
     } finally {
@@ -76,30 +122,106 @@ export default function App() {
   };
 
   const refreshAll = async () => {
+    const now = new Date().toISOString();
     await Promise.all([
-      api("/health").then(setHealth),
-      api("/data/status").then(setDataStatus),
-      api("/data/quality").then(setQuality),
-      api("/ingest/status").then(setIngestStatus),
-      api("/pipeline/status").then(setPipelineStatus),
-      api("/model/status").then(setModelStatus),
-      api("/prediction/logs?limit=100").then((d) => setPredictionLogs(d.rows || [])),
-      api("/docs/text").then(setDocs)
+      api("/health").then((d) => {
+        setHealth(d);
+        setLastUpdated((prev) => ({ ...prev, health: now }));
+      }),
+      api("/data/status").then((d) => {
+        setDataStatus(d);
+        setLastUpdated((prev) => ({ ...prev, dataStatus: now }));
+      }),
+      api("/data/quality").then((d) => {
+        setQuality(d);
+        setLastUpdated((prev) => ({ ...prev, quality: now }));
+      }),
+      api("/ingest/status").then((d) => {
+        setIngestStatus(d);
+        setLastUpdated((prev) => ({ ...prev, ingestStatus: now }));
+      }),
+      api("/pipeline/status").then((d) => {
+        setPipelineStatus(d);
+        setLastUpdated((prev) => ({ ...prev, pipelineStatus: now }));
+      }),
+      api("/model/status").then((d) => {
+        setModelStatus(d);
+        setLastUpdated((prev) => ({ ...prev, modelStatus: now }));
+      }),
+      api("/prediction/logs?limit=100").then((d) => {
+        setPredictionLogs(d.rows || []);
+        setLastUpdated((prev) => ({ ...prev, predictionLogs: now }));
+      }),
+      api("/docs/text").then((d) => {
+        setDocs(d);
+        setLastUpdated((prev) => ({ ...prev, docs: now }));
+      })
     ]);
   };
 
   useEffect(() => {
-    refreshAll().catch((err) => pushMessage(`Initial load failed: ${err.message}`, "err"));
-    const t = setInterval(() => {
-      refreshAll().catch(() => null);
-    }, 15000);
-    return () => clearInterval(t);
+    refreshAll().catch((err) => {
+      setLastError(`Initial load: ${err.message}`);
+      pushMessage(`Initial load failed: ${err.message}`, "err");
+    });
   }, []);
+
+  useEffect(() => {
+    if (!autoRefresh) return () => null;
+    const t = setInterval(() => {
+      refreshAll().catch((err) => {
+        setLastError(`refresh: ${err.message}`);
+        pushMessage(`refresh failed: ${err.message}`, "err");
+      });
+    }, refreshMs);
+    return () => clearInterval(t);
+  }, [autoRefresh, refreshMs]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.activeTab, activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.ticker, ticker);
+  }, [ticker]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.autoRefresh, String(autoRefresh));
+  }, [autoRefresh]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.refreshMs, String(refreshMs));
+  }, [refreshMs]);
 
   const totalRows = useMemo(() => {
     if (!dataStatus?.totals) return 0;
     return Object.values(dataStatus.totals).reduce((a, b) => a + Number(b || 0), 0);
   }, [dataStatus]);
+
+  const kpis = useMemo(() => {
+    const dups = quality?.duplicate_keys || {};
+    const nulls = quality?.null_checks || {};
+    const fresh = quality?.freshness || {};
+    return {
+      duplicateCount:
+        Number(dups.news_source_url_duplicates || 0) + Number(dups.market_ticker_timestamp_duplicates || 0),
+      nullRatio: Number(nulls.news_published_at_null_ratio || 0),
+      newsStale: !!fresh.news_stale,
+      marketStale: !!fresh.market_stale
+    };
+  }, [quality]);
+
+  const filteredLogs = useMemo(() => {
+    return predictionLogs.filter((row) => {
+      const tickerPass = !logTickerFilter || row.ticker?.toUpperCase().includes(logTickerFilter.toUpperCase());
+      const predPass = logPredFilter === "all" || row.prediction === logPredFilter;
+      return tickerPass && predPass;
+    });
+  }, [predictionLogs, logTickerFilter, logPredFilter]);
+
+  const latestRunStatus = pipelineStatus?.latest_run?.status || ingestStatus?.latest_run?.status || "none";
+  const statusTone =
+    latestRunStatus === "success" ? "good" : latestRunStatus === "failed" ? "bad" : latestRunStatus === "running" ? "warn" : "ink";
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_10%_10%,#1e2f5f_0,#0b1020_45%,#050810_100%)] font-body text-ink">
@@ -115,21 +237,55 @@ export default function App() {
             <button
               className="rounded-lg border border-accent/60 bg-accent/20 px-4 py-2 text-sm font-medium hover:bg-accent/30"
               onClick={() => runAction("refresh", refreshAll)}
+              title="Refresh all dashboard panels (GET /health, /data/*, /ingest/status, /pipeline/status, /model/status, /prediction/logs, /docs/text)"
             >
               {busy.refresh ? "Refreshing..." : "Refresh Now"}
             </button>
           </div>
+          <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-mute">
+            <label className="inline-flex items-center gap-2">
+              <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
+              Auto refresh
+            </label>
+            <label className="inline-flex items-center gap-2">
+              Interval
+              <select
+                className="rounded border border-line bg-bg px-2 py-1 text-ink"
+                value={refreshMs}
+                onChange={(e) => setRefreshMs(Number(e.target.value))}
+              >
+                <option value={5000}>5s</option>
+                <option value={15000}>15s</option>
+                <option value={30000}>30s</option>
+              </select>
+            </label>
+            <span>Last refresh: {fmtTime(lastUpdated.health)}</span>
+          </div>
+          {lastError && (
+            <div className="mt-3 rounded-lg border border-bad/60 bg-bad/10 px-3 py-2 text-xs text-bad">
+              Last error: {lastError}
+            </div>
+          )}
         </header>
 
         <section className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard label="Health" value={health?.status || "unknown"} tone={health?.status === "ok" ? "good" : "warn"} />
           <StatCard label="Total Rows" value={totalRows} />
           <StatCard label="Latest Model" value={modelStatus?.metadata?.version_id || "none"} tone="accent" />
-          <StatCard
-            label="Latest Run"
-            value={pipelineStatus?.latest_run?.status || ingestStatus?.latest_run?.status || "none"}
-            tone={pipelineStatus?.latest_run?.status === "success" ? "good" : "warn"}
-          />
+          <StatCard label="Latest Run" value={latestRunStatus} tone={statusTone} />
+        </section>
+
+        <section className="mb-6 flex flex-wrap gap-2">
+          <span className={`rounded-full border px-3 py-1 text-xs ${kpis.newsStale ? "border-bad text-bad" : "border-good text-good"}`}>
+            news_stale: {String(kpis.newsStale)}
+          </span>
+          <span className={`rounded-full border px-3 py-1 text-xs ${kpis.marketStale ? "border-bad text-bad" : "border-good text-good"}`}>
+            market_stale: {String(kpis.marketStale)}
+          </span>
+          <span className="rounded-full border border-line px-3 py-1 text-xs text-mute">duplicates: {kpis.duplicateCount}</span>
+          <span className="rounded-full border border-line px-3 py-1 text-xs text-mute">
+            null_ratio: {(kpis.nullRatio * 100).toFixed(2)}%
+          </span>
         </section>
 
         <nav className="mb-5 flex flex-wrap gap-2">
@@ -162,6 +318,7 @@ export default function App() {
                       return out;
                     })
                   }
+                  title="POST /ingest/run"
                 >
                   <div className="font-medium">Run Ingestion</div>
                   <div className="text-xs text-mute">News + market pull</div>
@@ -175,40 +332,48 @@ export default function App() {
                       return out;
                     })
                   }
+                  title="POST /pipeline/run"
                 >
                   <div className="font-medium">Run NLP + Features</div>
                   <div className="text-xs text-mute">Signal, feature, label jobs</div>
                 </button>
                 <button
                   className="rounded-lg border border-line bg-bg/60 px-4 py-3 text-left hover:border-accent/70"
-                  onClick={() =>
-                    runAction("model_train", async () => {
+                  onClick={() => {
+                    if (!window.confirm("Train model now? This overwrites latest model pointers.")) return;
+                    return runAction("model_train", async () => {
                       const out = await api("/model/train", { method: "POST" });
                       await refreshAll();
                       return out;
-                    })
-                  }
+                    });
+                  }}
+                  title="POST /model/train"
                 >
                   <div className="font-medium">Train Model</div>
                   <div className="text-xs text-mute">Versioned artifact save</div>
                 </button>
                 <button
                   className="rounded-lg border border-accent/70 bg-accent/20 px-4 py-3 text-left hover:bg-accent/30"
-                  onClick={() =>
-                    runAction("run_full", async () => {
+                  onClick={() => {
+                    if (!window.confirm("Run full refresh? This runs ingestion, pipeline, and model training.")) return;
+                    return runAction("run_full", async () => {
                       const out = await api("/run/full?train_model=true", { method: "POST" });
                       await refreshAll();
                       return out;
-                    })
-                  }
+                    });
+                  }}
+                  title="POST /run/full?train_model=true"
                 >
                   <div className="font-medium">Run Full Refresh</div>
                   <div className="text-xs text-mute">Ingest {"->"} pipeline {"->"} train</div>
                 </button>
               </div>
+              <div className="mt-2 text-xs text-mute">
+                Updated: ingest {fmtTime(lastUpdated.ingestStatus)} | pipeline {fmtTime(lastUpdated.pipelineStatus)}
+              </div>
               <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                <JsonBlock data={ingestStatus || {}} />
-                <JsonBlock data={pipelineStatus || {}} />
+                <JsonBlock data={ingestStatus || {}} label="ingest status" />
+                <JsonBlock data={pipelineStatus || {}} label="pipeline status" />
               </div>
             </div>
 
@@ -255,20 +420,41 @@ export default function App() {
                       return out;
                     })
                   }
+                  title="GET /predict?ticker=..."
                 >
                   Predict
                 </button>
               </div>
+              <div className="mt-2 text-xs text-mute">Updated: predict {fmtTime(lastUpdated.predictionLogs)} | model {fmtTime(lastUpdated.modelStatus)}</div>
               <div className="mt-4">
-                <JsonBlock data={prediction || { hint: "Run prediction to view output" }} />
+                <JsonBlock data={prediction || { hint: "Run prediction to view output" }} label="prediction output" />
               </div>
               <div className="mt-4">
-                <JsonBlock data={modelStatus || {}} />
+                <JsonBlock data={modelStatus || {}} label="model status" />
               </div>
             </div>
 
             <div className="rounded-2xl border border-line bg-panel/70 p-5">
               <h2 className="font-display text-xl">Prediction Log</h2>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+                <input
+                  value={logTickerFilter}
+                  onChange={(e) => setLogTickerFilter(e.target.value.toUpperCase())}
+                  placeholder="Filter ticker"
+                  className="w-36 rounded border border-line bg-bg/60 px-2 py-1 text-xs"
+                />
+                <select
+                  value={logPredFilter}
+                  onChange={(e) => setLogPredFilter(e.target.value)}
+                  className="rounded border border-line bg-bg/60 px-2 py-1 text-xs"
+                >
+                  <option value="all">All</option>
+                  <option value="up">Up</option>
+                  <option value="down">Down</option>
+                  <option value="hold">Hold</option>
+                </select>
+                <span className="text-xs text-mute">Rows: {filteredLogs.length}</span>
+              </div>
               <div className="mt-3 max-h-[520px] overflow-auto rounded-lg border border-line">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-bg/90 text-mute">
@@ -281,7 +467,7 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {predictionLogs.map((row) => (
+                    {filteredLogs.map((row) => (
                       <tr key={row.id} className="border-t border-line/50">
                         <td className="px-3 py-2">{row.created_at || "-"}</td>
                         <td className="px-3 py-2">{row.ticker}</td>
@@ -290,7 +476,7 @@ export default function App() {
                         <td className="px-3 py-2">{row.model_version || "-"}</td>
                       </tr>
                     ))}
-                    {predictionLogs.length === 0 && (
+                    {filteredLogs.length === 0 && (
                       <tr>
                         <td className="px-3 py-4 text-mute" colSpan={5}>
                           No prediction logs yet.
@@ -308,14 +494,16 @@ export default function App() {
           <section className="grid gap-6 lg:grid-cols-2">
             <div className="rounded-2xl border border-line bg-panel/70 p-5">
               <h2 className="font-display text-xl">Data Status</h2>
+              <div className="mt-2 text-xs text-mute">Updated: {fmtTime(lastUpdated.dataStatus)}</div>
               <div className="mt-4">
-                <JsonBlock data={dataStatus || {}} />
+                <JsonBlock data={dataStatus || {}} label="data status" />
               </div>
             </div>
             <div className="rounded-2xl border border-line bg-panel/70 p-5">
               <h2 className="font-display text-xl">Data Quality</h2>
+              <div className="mt-2 text-xs text-mute">Updated: {fmtTime(lastUpdated.quality)}</div>
               <div className="mt-4">
-                <JsonBlock data={quality || {}} />
+                <JsonBlock data={quality || {}} label="data quality" />
               </div>
             </div>
           </section>
@@ -325,6 +513,7 @@ export default function App() {
           <section className="grid gap-6 lg:grid-cols-2">
             <article className="rounded-2xl border border-line bg-panel/70 p-5">
               <h2 className="mb-3 font-display text-xl">README</h2>
+              <div className="mb-3 text-xs text-mute">Updated: {fmtTime(lastUpdated.docs)}</div>
               <div className="prose prose-invert max-w-none text-sm prose-headings:font-display">
                 <ReactMarkdown>{docs.readme_markdown || "_No README text loaded_"}</ReactMarkdown>
               </div>

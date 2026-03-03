@@ -72,6 +72,7 @@ The dashboard calls the API through Vite proxy and exposes:
 - data quality/status views
 - prediction log table
 - embedded `README.md` and `PROJECT_OVERVIEW.txt` text
+- tooltips, confirm prompts, auto-refresh controls, KPI badges, filtered logs, and copy-to-clipboard JSON blocks
 
 ## 4) Trigger ingestion manually
 
