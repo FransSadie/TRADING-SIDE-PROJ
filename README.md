@@ -6,6 +6,8 @@ This project starts with a data-ingestion foundation for:
 - Storage of raw records for downstream NLP/features/modeling
 - NLP signal extraction + feature snapshots + labels for baseline modeling
 - Baseline model training + prediction endpoint
+- Data quality checks + walk-forward/baseline evaluation metadata
+- React + Vite + Tailwind operator dashboard
 
 ## 1) Setup
 
@@ -17,6 +19,15 @@ copy .env.example .env
 ```
 
 Set `NEWS_API_KEY` in `.env`.
+
+Recommended coverage settings in `.env` for better model training:
+- `MARKET_TICKERS=AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA,SPY,QQQ,IWM,DIA`
+- `MARKET_HISTORY_PERIOD=1y`
+- `MARKET_HISTORY_INTERVAL=1d`
+- `NEWS_PAGE_SIZE=100`
+- `NEWS_MAX_PAGES=3`
+- `NEWS_LOOKBACK_DAYS=7`
+- `PREDICT_HOLD_THRESHOLD=0.6`
 
 ## 2) Run API + scheduler
 
@@ -32,7 +43,25 @@ PowerShell helper:
 
 On startup, tables are created and the scheduler starts.
 
-## 3) Trigger ingestion manually
+## 3) Run frontend dashboard (React + Vite + Tailwind)
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open:
+- `http://127.0.0.1:5173`
+
+The dashboard calls the API through Vite proxy and exposes:
+- pipeline control buttons
+- model training/predict
+- data quality/status views
+- prediction log table
+- embedded `README.md` and `PROJECT_OVERVIEW.txt` text
+
+## 4) Trigger ingestion manually
 
 ```bash
 python -m app.ingestion.run_once
@@ -44,13 +73,12 @@ Or test API endpoints (run in a second terminal while API is running):
 .\scripts\smoke_api.ps1
 ```
 
-## 4) Health check
+## 5) Health check
 
-.\.venv\Scripts\python.exe -m app.ingestion.run_once
-.\.venv\Scripts\python.exe -m app.features.run_once
+`GET http://127.0.0.1:8000/health`
 
 
-## 5) Run NLP + feature + label pipeline
+## 6) Run NLP + feature + label pipeline
 
 ```bash
 python -m app.features.run_once
@@ -66,8 +94,17 @@ API option (while server is running):
 
 - `POST /pipeline/run`
 - `GET /pipeline/status`
+- `GET /data/status`
+- `GET /data/quality`
 
-## 6) Train baseline model
+For larger historical backfills, run:
+
+```bash
+python -m app.ingestion.run_once
+python -m app.features.run_once
+```
+
+## 7) Train baseline model
 
 ```bash
 python -m app.models.train_baseline
@@ -80,8 +117,11 @@ PowerShell helper:
 ```
 
 Artifacts are saved in `./artifacts` by default:
-- `baseline_model.joblib`
-- `baseline_metadata.json`
+- `baseline_model.joblib` (latest pointer)
+- `baseline_metadata.json` (latest pointer)
+- `baseline_model_<version>.joblib` (versioned)
+- `baseline_metadata_<version>.json` (versioned)
+- `current_model.json` (active version manifest)
 
 Note: if training data has only one class, training falls back to a `DummyClassifier` until more varied data is collected.
 
@@ -90,6 +130,22 @@ API options:
 - `POST /model/train`
 - `GET /model/status`
 - `GET /predict?ticker=NVDA`
+- `GET /prediction/logs?limit=100`
+- `GET /docs/text`
+- `POST /run/full?train_model=true`
+
+Prediction behavior:
+- If confidence is below `PREDICT_HOLD_THRESHOLD`, endpoint returns `prediction=hold`.
+- All API predictions are logged in `prediction_logs`.
+
+## 8) Runbook Commands (PowerShell)
+
+- Full refresh + train:
+  - `.\scripts\run_full_refresh.ps1`
+- Data status/quality report:
+  - `.\scripts\show_data_checks.ps1`
+- Local one-off prediction:
+  - `.\scripts\predict_ticker.ps1 -Ticker SPY`
 
 ## Data model
 
@@ -97,9 +153,10 @@ API options:
 - `market_prices`: OHLCV snapshots per ticker/interval
 - `ingestion_runs`: job-level audit trail
 - `news_signals`: per article/ticker sentiment + relevance rows
-- `feature_snapshots`: rolling aggregates per ticker/window
+- `feature_snapshots`: rolling aggregates per ticker/window, including price volatility and momentum features
 - `market_labels`: horizon-based direction labels from future returns
+- `prediction_logs`: API prediction audit history (ticker, prediction, confidence, model version, timestamp)
 
 ## Next step after ingestion
 
-Improve model quality (more tickers/features, better NLP, larger history, walk-forward backtests).
+Integrate historical non-paid news source (for example GDELT subset) and retrain on larger balanced data.

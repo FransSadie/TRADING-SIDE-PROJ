@@ -50,6 +50,24 @@ DEFAULT_TICKER_ALIASES: dict[str, tuple[str, ...]] = {
     "QQQ": ("nasdaq 100", "nasdaq", "tech stocks", "big tech"),
 }
 
+SOURCE_WEIGHTS: dict[str, float] = {
+    "reuters": 1.3,
+    "bloomberg": 1.3,
+    "wall street journal": 1.25,
+    "financial times": 1.25,
+    "cnbc": 1.15,
+    "marketwatch": 1.1,
+    "yahoo finance": 1.05,
+}
+
+EVENT_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "earnings": ("earnings", "eps", "guidance"),
+    "rates": ("fed", "rate", "interest rate", "cut", "hike"),
+    "inflation": ("inflation", "cpi", "ppi"),
+    "m_and_a": ("acquire", "merger", "buyout"),
+    "regulation": ("regulation", "antitrust", "lawsuit", "fine"),
+}
+
 
 def _start_run(job_name: str) -> IngestionRun:
     session = get_db_session()
@@ -111,6 +129,22 @@ def _relevance_score(text: str, ticker: str) -> float:
     return max(min((mentions / tokens) * 50, 1.0), 0.0)
 
 
+def _source_weight(source_name: str) -> float:
+    lowered = (source_name or "").lower()
+    for key, weight in SOURCE_WEIGHTS.items():
+        if key in lowered:
+            return weight
+    return 1.0
+
+
+def _event_tags(text: str) -> str | None:
+    lowered = (text or "").lower()
+    tags = [tag for tag, keywords in EVENT_KEYWORDS.items() if any(keyword in lowered for keyword in keywords)]
+    if not tags:
+        return None
+    return ",".join(sorted(tags))
+
+
 def run_news_nlp() -> int:
     settings = get_settings()
     run = _start_run("news_nlp")
@@ -127,6 +161,8 @@ def run_news_nlp() -> int:
                     continue
 
                 sentiment = _sentiment_score(text)
+                source_weight = _source_weight(article.source_name)
+                event_tags = _event_tags(text)
                 for ticker in tickers:
                     exists = session.execute(
                         select(NewsSignal.id).where(NewsSignal.article_id == article.id, NewsSignal.ticker == ticker)
@@ -136,8 +172,10 @@ def run_news_nlp() -> int:
                     signal = NewsSignal(
                         article_id=article.id,
                         ticker=ticker,
-                        sentiment_score=sentiment,
+                        sentiment_score=max(min(sentiment * source_weight, 1.0), -1.0),
                         relevance_score=_relevance_score(text, ticker),
+                        source_weight=source_weight,
+                        event_tags=event_tags,
                         published_at=article.published_at,
                     )
                     session.add(signal)

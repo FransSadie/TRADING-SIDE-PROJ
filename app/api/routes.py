@@ -5,11 +5,20 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import func, select
 
 from app.core.config import get_settings
-from app.db.models import FeatureSnapshot, IngestionRun, MarketLabel, MarketPrice, NewsArticle, NewsSignal
+from app.data_quality.checks import data_status_snapshot, run_data_quality_checks
+from app.db.models import (
+    FeatureSnapshot,
+    IngestionRun,
+    MarketLabel,
+    MarketPrice,
+    NewsArticle,
+    NewsSignal,
+    PredictionLog,
+)
 from app.db.session import get_db_session
 from app.features.pipeline import run_feature_generation, run_label_generation
 from app.ingestion.pipeline import run_all_ingestion
-from app.models.inference import predict_for_ticker
+from app.models.inference import log_prediction, predict_for_ticker
 from app.models.train_baseline import train_and_save_baseline
 from app.nlp.pipeline import run_news_nlp
 
@@ -55,6 +64,26 @@ def pipeline_run() -> dict:
         "news_signals_inserted": news_signal_count,
         "feature_rows_inserted": feature_count,
         "labels_inserted": label_count,
+    }
+
+
+@router.post("/run/full")
+def run_full(train_model: bool = True) -> dict:
+    ingestion = run_all_ingestion()
+    news_signal_count = run_news_nlp()
+    feature_count = run_feature_generation(window_hours=24)
+    label_count = run_label_generation(horizon_days=1)
+    model_result = None
+    if train_model:
+        model_result = train_and_save_baseline()
+    return {
+        "ingestion": ingestion,
+        "pipeline": {
+            "news_signals_inserted": news_signal_count,
+            "feature_rows_inserted": feature_count,
+            "labels_inserted": label_count,
+        },
+        "model_training": model_result,
     }
 
 
@@ -104,8 +133,55 @@ def model_status() -> dict:
 @router.get("/predict")
 def predict(ticker: str) -> dict:
     try:
-        return predict_for_ticker(ticker=ticker)
+        result = predict_for_ticker(ticker=ticker)
+        log_prediction(result)
+        return result
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/data/status")
+def data_status() -> dict:
+    return data_status_snapshot()
+
+
+@router.get("/data/quality")
+def data_quality() -> dict:
+    return run_data_quality_checks()
+
+
+@router.get("/prediction/logs")
+def prediction_logs(limit: int = 100) -> dict:
+    page_size = max(1, min(limit, 1000))
+    session = get_db_session()
+    try:
+        rows = session.execute(
+            select(PredictionLog).order_by(PredictionLog.created_at.desc()).limit(page_size)
+        ).scalars().all()
+        return {
+            "rows": [
+                {
+                    "id": row.id,
+                    "ticker": row.ticker,
+                    "prediction": row.prediction,
+                    "probability_up": row.probability_up,
+                    "confidence": row.confidence,
+                    "model_version": row.model_version,
+                    "window_end": row.window_end.isoformat() if row.window_end else None,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in rows
+            ]
+        }
+    finally:
+        session.close()
+
+
+@router.get("/docs/text")
+def docs_text() -> dict:
+    root = Path(__file__).resolve().parents[2]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    overview = (root / "PROJECT_OVERVIEW.txt").read_text(encoding="utf-8")
+    return {"readme_markdown": readme, "project_overview_text": overview}

@@ -52,40 +52,82 @@ def run_feature_generation(window_hours: int = 24) -> int:
                     )
                 ).all()
             )
+            existing_rows = session.execute(
+                select(FeatureSnapshot).where(FeatureSnapshot.window_hours == window_hours)
+            ).scalars().all()
+            existing_map = {
+                (row.ticker, row.window_end, row.window_hours): row
+                for row in existing_rows
+            }
+            latest_rows = session.execute(
+                select(FeatureSnapshot)
+                .where(FeatureSnapshot.window_hours == window_hours)
+                .order_by(FeatureSnapshot.ticker.asc(), FeatureSnapshot.window_end.desc())
+            ).scalars().all()
+            prev_tracker = _latest_feature_tracker(latest_rows)
             pending_keys: set[tuple[str, datetime, int]] = set()
+            signals_by_ticker = _group_signals(signals)
 
-            for idx, signal in enumerate(signals):
-                if not signal.published_at:
-                    continue
-                window_end = signal.published_at.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-                feature_key = (signal.ticker, window_end, window_hours)
-                if feature_key in existing_keys or feature_key in pending_keys:
-                    continue
+            for ticker, rows in price_index.items():
+                ticker_signals = signals_by_ticker.get(ticker, [])
+                for idx, price_row in enumerate(rows):
+                    window_end = price_row.timestamp
+                    feature_key = (ticker, window_end, window_hours)
+                    existing_row = existing_map.get(feature_key)
+                    if feature_key in pending_keys:
+                        continue
+                    if existing_row and not _needs_feature_backfill(existing_row):
+                        prev_tracker[ticker] = {
+                            "news_count": float(existing_row.news_count),
+                            "sentiment_mean": existing_row.sentiment_mean,
+                        }
+                        continue
 
-                window_start = window_end - timedelta(hours=window_hours)
-                in_window = _window_signals(signals, signal.ticker, window_start, window_end, idx)
-                if not in_window:
-                    continue
+                    window_start = window_end - timedelta(hours=window_hours)
+                    in_window = _signals_in_window(ticker_signals, window_start, window_end)
+                    sentiments = [item.sentiment_score for item in in_window]
+                    relevances = [item.relevance_score for item in in_window]
+                    weights = [item.source_weight for item in in_window]
+                    event_intensity = _event_intensity(in_window)
 
-                sentiments = [item.sentiment_score for item in in_window]
-                relevances = [item.relevance_score for item in in_window]
-                close_price, return_1d = _price_features(price_index.get(signal.ticker, []), window_end)
+                    close_price, return_1d, price_return_5d, rolling_volatility_20d, volume_zscore_20d = _price_features(
+                        rows, idx
+                    )
+                    news_count = len(in_window)
+                    sentiment_mean = _mean(sentiments)
+                    previous = prev_tracker.get(ticker, {"news_count": None, "sentiment_mean": None})
+                    news_count_change = (
+                        float(news_count - previous["news_count"]) if previous["news_count"] is not None else None
+                    )
+                    sentiment_momentum = (
+                        sentiment_mean - previous["sentiment_mean"]
+                        if sentiment_mean is not None and previous["sentiment_mean"] is not None
+                        else None
+                    )
 
-                row = FeatureSnapshot(
-                    ticker=signal.ticker,
-                    window_end=window_end,
-                    window_hours=window_hours,
-                    news_count=len(in_window),
-                    sentiment_mean=_mean(sentiments),
-                    sentiment_sum=sum(sentiments),
-                    sentiment_std=_std(sentiments),
-                    relevance_mean=_mean(relevances),
-                    price_close=close_price,
-                    return_1d=return_1d,
-                )
-                session.add(row)
-                pending_keys.add(feature_key)
-                inserted += 1
+                    if existing_row:
+                        row = existing_row
+                    else:
+                        row = FeatureSnapshot(ticker=ticker, window_end=window_end, window_hours=window_hours)
+                        session.add(row)
+                        inserted += 1
+                    row.news_count = news_count
+                    row.sentiment_mean = sentiment_mean
+                    row.sentiment_sum = sum(sentiments) if sentiments else 0.0
+                    row.sentiment_std = _std(sentiments)
+                    row.relevance_mean = _mean(relevances)
+                    row.source_weight_mean = _mean(weights)
+                    row.event_intensity = event_intensity
+                    row.news_count_change_24h = news_count_change
+                    row.sentiment_momentum_24h = sentiment_momentum
+                    row.price_close = close_price
+                    row.return_1d = return_1d
+                    row.price_return_5d = price_return_5d
+                    row.rolling_volatility_20d = rolling_volatility_20d
+                    row.volume_zscore_20d = volume_zscore_20d
+                    pending_keys.add(feature_key)
+                    prev_tracker[ticker] = {"news_count": news_count, "sentiment_mean": sentiment_mean}
+                    existing_keys.add(feature_key)
             session.commit()
         finally:
             session.close()
@@ -145,18 +187,22 @@ def run_label_generation(horizon_days: int = 1) -> int:
         return inserted
 
 
-def _window_signals(signals: list[NewsSignal], ticker: str, start: datetime, end: datetime, stop_index: int) -> list[NewsSignal]:
-    items: list[NewsSignal] = []
-    for idx in range(stop_index, -1, -1):
-        signal = signals[idx]
-        if signal.ticker != ticker or not signal.published_at:
-            continue
-        if signal.published_at < start:
-            if signal.ticker == ticker:
-                break
-        if start <= signal.published_at <= end:
-            items.append(signal)
-    return items
+def _group_signals(signals: list[NewsSignal]) -> dict[str, list[NewsSignal]]:
+    grouped: dict[str, list[NewsSignal]] = {}
+    for signal in signals:
+        grouped.setdefault(signal.ticker, []).append(signal)
+    return grouped
+
+
+def _signals_in_window(signals: list[NewsSignal], start: datetime, end: datetime) -> list[NewsSignal]:
+    return [signal for signal in signals if signal.published_at and start <= signal.published_at <= end]
+
+
+def _event_intensity(signals: list[NewsSignal]) -> float | None:
+    if not signals:
+        return None
+    tagged = sum(1 for signal in signals if signal.event_tags)
+    return tagged / len(signals)
 
 
 def _build_price_index(prices: list[MarketPrice]) -> dict[str, list[MarketPrice]]:
@@ -169,28 +215,72 @@ def _build_price_index(prices: list[MarketPrice]) -> dict[str, list[MarketPrice]
     return index
 
 
-def _price_features(price_rows: list[MarketPrice], when: datetime) -> tuple[float | None, float | None]:
+def _price_features(
+    price_rows: list[MarketPrice], current_index: int
+) -> tuple[float | None, float | None, float | None, float | None, float | None]:
     if not price_rows:
-        return None, None
-    closest_idx = -1
-    for idx, row in enumerate(price_rows):
-        if row.timestamp <= when:
-            closest_idx = idx
-        else:
-            break
-    if closest_idx == -1:
-        return None, None
-    current = price_rows[closest_idx]
+        return None, None, None, None, None
+    if current_index < 0 or current_index >= len(price_rows):
+        return None, None, None, None, None
+
+    current = price_rows[current_index]
     close_price = current.close
-    if close_price is None or close_price == 0:
-        return close_price, None
-    next_idx = closest_idx + 1
-    if next_idx >= len(price_rows) or price_rows[next_idx].close is None:
-        return close_price, None
-    next_close = price_rows[next_idx].close
-    if next_close is None:
-        return close_price, None
-    return close_price, (next_close - close_price) / close_price
+    next_return = None
+    if close_price is not None and close_price != 0 and current_index + 1 < len(price_rows):
+        next_close = price_rows[current_index + 1].close
+        if next_close is not None:
+            next_return = (next_close - close_price) / close_price
+
+    price_return_5d = None
+    if close_price is not None and close_price != 0 and current_index >= 5:
+        prev_close = price_rows[current_index - 5].close
+        if prev_close is not None and prev_close != 0:
+            price_return_5d = (close_price - prev_close) / prev_close
+
+    rolling_volatility_20d = None
+    if current_index >= 20:
+        returns = []
+        for i in range(current_index - 19, current_index + 1):
+            prev = price_rows[i - 1].close if i - 1 >= 0 else None
+            curr = price_rows[i].close
+            if prev is not None and prev != 0 and curr is not None:
+                returns.append((curr - prev) / prev)
+        rolling_volatility_20d = _std(returns) if returns else None
+
+    volume_zscore_20d = None
+    if current_index >= 20 and current.volume is not None:
+        volumes = [price_rows[i].volume for i in range(current_index - 19, current_index + 1)]
+        clean_volumes = [v for v in volumes if v is not None]
+        if len(clean_volumes) >= 5:
+            avg = _mean(clean_volumes)
+            sd = _std(clean_volumes)
+            if avg is not None and sd is not None and sd > 0:
+                volume_zscore_20d = (current.volume - avg) / sd
+
+    return close_price, next_return, price_return_5d, rolling_volatility_20d, volume_zscore_20d
+
+
+def _latest_feature_tracker(rows: list[FeatureSnapshot]) -> dict[str, dict[str, float | None]]:
+    tracker: dict[str, dict[str, float | None]] = {}
+    for row in rows:
+        if row.ticker not in tracker:
+            tracker[row.ticker] = {"news_count": float(row.news_count), "sentiment_mean": row.sentiment_mean}
+    return tracker
+
+
+def _needs_feature_backfill(row: FeatureSnapshot) -> bool:
+    return any(
+        value is None
+        for value in [
+            row.source_weight_mean,
+            row.event_intensity,
+            row.news_count_change_24h,
+            row.sentiment_momentum_24h,
+            row.price_return_5d,
+            row.rolling_volatility_20d,
+            row.volume_zscore_20d,
+        ]
+    )
 
 
 def _mean(values: list[float]) -> float | None:

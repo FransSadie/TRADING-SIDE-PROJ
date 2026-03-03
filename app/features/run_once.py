@@ -1,13 +1,12 @@
 from app.core.logging import setup_logging
-from app.db.base import Base
-from app.db.session import engine
+from app.db.schema import ensure_schema
 from app.features.pipeline import run_feature_generation, run_label_generation
 from app.nlp.pipeline import run_news_nlp
 
 
 def main() -> None:
     setup_logging()
-    Base.metadata.create_all(bind=engine)
+    ensure_schema()
 
     news_signal_count = run_news_nlp()
     feature_count = run_feature_generation(window_hours=24)
@@ -24,4 +23,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

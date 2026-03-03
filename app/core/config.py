@@ -21,10 +21,15 @@ class Settings(BaseSettings):
     )
     news_language: str = Field(default="en", alias="NEWS_LANGUAGE")
     news_page_size: int = Field(default=50, alias="NEWS_PAGE_SIZE")
+    news_max_pages: int = Field(default=3, alias="NEWS_MAX_PAGES")
+    news_lookback_days: int = Field(default=7, alias="NEWS_LOOKBACK_DAYS")
 
     market_tickers: str = Field(default="AAPL,MSFT,NVDA,SPY,QQQ", alias="MARKET_TICKERS")
+    market_history_period: str = Field(default="1y", alias="MARKET_HISTORY_PERIOD")
+    market_history_interval: str = Field(default="1d", alias="MARKET_HISTORY_INTERVAL")
     ingest_interval_minutes: int = Field(default=15, alias="INGEST_INTERVAL_MINUTES")
     model_artifacts_dir: str = Field(default="./artifacts", alias="MODEL_ARTIFACTS_DIR")
+    predict_hold_threshold: float = Field(default=0.6, alias="PREDICT_HOLD_THRESHOLD")
 
     @property
     def market_ticker_list(self) -> List[str]:

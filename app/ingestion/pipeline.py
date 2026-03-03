@@ -113,7 +113,16 @@ def run_market_ingestion() -> int:
     run = _start_run("market_ingestion")
     inserted = 0
     try:
-        frames = fetch_latest_prices(settings.market_ticker_list, period="5d", interval="1d")
+        if settings.market_history_interval != "1d":
+            logger.warning(
+                "Market ingestion interval is %s, but feature/label pipeline currently uses 1d rows.",
+                settings.market_history_interval,
+            )
+        frames = fetch_latest_prices(
+            settings.market_ticker_list,
+            period=settings.market_history_period,
+            interval=settings.market_history_interval,
+        )
 
         session = get_db_session()
         try:
@@ -131,7 +140,7 @@ def run_market_ingestion() -> int:
                 model = MarketPrice(
                     ticker=ticker,
                     timestamp=timestamp,
-                    interval="1d",
+                    interval=settings.market_history_interval,
                     open=_to_float(row.get("Open")),
                     high=_to_float(row.get("High")),
                     low=_to_float(row.get("Low")),

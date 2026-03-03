@@ -8,12 +8,19 @@ from app.db.session import get_db_session
 
 FEATURE_COLUMNS = [
     "news_count",
+    "news_count_change_24h",
     "sentiment_mean",
     "sentiment_sum",
     "sentiment_std",
+    "sentiment_momentum_24h",
     "relevance_mean",
+    "source_weight_mean",
+    "event_intensity",
     "price_close",
     "return_1d",
+    "price_return_5d",
+    "rolling_volatility_20d",
+    "volume_zscore_20d",
 ]
 
 
@@ -37,8 +44,15 @@ def load_training_dataframe(horizon_days: int = 1, window_hours: int = 24) -> pd
                 "sentiment_sum": row.sentiment_sum,
                 "sentiment_std": row.sentiment_std,
                 "relevance_mean": row.relevance_mean,
+                "source_weight_mean": row.source_weight_mean,
+                "event_intensity": row.event_intensity,
+                "news_count_change_24h": row.news_count_change_24h,
+                "sentiment_momentum_24h": row.sentiment_momentum_24h,
                 "price_close": row.price_close,
                 "return_1d": row.return_1d,
+                "price_return_5d": row.price_return_5d,
+                "rolling_volatility_20d": row.rolling_volatility_20d,
+                "volume_zscore_20d": row.volume_zscore_20d,
             }
             for row in feature_rows
         ]
@@ -120,7 +134,14 @@ def latest_feature_row_for_ticker(ticker: str, window_hours: int = 24) -> dict |
         "sentiment_sum": row.sentiment_sum,
         "sentiment_std": row.sentiment_std,
         "relevance_mean": row.relevance_mean,
+        "source_weight_mean": row.source_weight_mean,
+        "event_intensity": row.event_intensity,
+        "news_count_change_24h": row.news_count_change_24h,
+        "sentiment_momentum_24h": row.sentiment_momentum_24h,
         "price_close": row.price_close,
         "return_1d": row.return_1d,
+        "price_return_5d": row.price_return_5d,
+        "rolling_volatility_20d": row.rolling_volatility_20d,
+        "volume_zscore_20d": row.volume_zscore_20d,
     }
     return data

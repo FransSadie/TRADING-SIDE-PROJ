@@ -1,5 +1,5 @@
 PROJECT OVERVIEW (LIVING DOCUMENT)
-Last updated: 2026-03-02 (model baseline phase added)
+Last updated: 2026-03-03 (frontend dashboard + orchestration APIs)
 
 ==================================================
 TECHNICAL TERMS
@@ -10,12 +10,16 @@ TECHNICAL TERMS
 
 2) Current Architecture
 - Backend: FastAPI
+- Frontend: React + Vite + Tailwind (frontend/)
 - DB access: SQLAlchemy ORM
 - DB target: PostgreSQL (URL normalized to postgresql+pg8000://), SQLite fallback supported
 - Scheduling: APScheduler
 - Data sources:
   - News: News API (/v2/everything)
   - Prices: Yahoo Finance via yfinance
+- Coverage controls (env-driven):
+  - News paging and recency window
+  - Market history period and ticker universe
 
 3) Core Data Flow
 - Ingestion layer:
@@ -24,16 +28,24 @@ TECHNICAL TERMS
   - Every job run logged -> ingestion_runs
 - NLP layer:
   - Article text processed into per-article/per-ticker signals -> news_signals
+  - Source weighting + event tags attached to each signal
 - Feature layer:
   - Rolling aggregation by ticker/window -> feature_snapshots
+  - Includes momentum, volatility, and volume-derived features
 - Label layer:
   - Future return + binary direction target -> market_labels
 - Model layer:
   - Join features + labels by ticker/date
   - Time-ordered train/validation split
-  - Logistic Regression baseline training
-  - Save model and metadata artifacts
-  - Predict endpoint uses latest feature row per ticker
+  - Logistic Regression baseline training (Dummy fallback for single-class training)
+  - Walk-forward evaluation + baseline comparisons (dummy + price-only)
+  - Versioned model artifacts + current-model manifest
+  - Predict endpoint uses latest feature row per ticker and confidence threshold hold mode
+- Observability layer:
+  - /data/status and /data/quality endpoints
+  - prediction_logs table captures every API prediction
+- Operator UI layer:
+  - Browser dashboard for one-click pipeline actions and live status views
 
 4) Tables and Their Roles
 - news_articles
@@ -45,37 +57,49 @@ TECHNICAL TERMS
 - ingestion_runs
   - Pipeline audit table for job_name, status, rows_inserted, start/end, message
 - news_signals
-  - NLP outputs per (article_id, ticker): sentiment_score, relevance_score
+  - NLP outputs per (article_id, ticker): sentiment_score, relevance_score, source_weight, event_tags
   - Dedupe: unique(article_id, ticker)
 - feature_snapshots
   - Time-window aggregates for model inputs:
-    news_count, sentiment_mean/sum/std, relevance_mean, price_close, return_1d
+    news_count, sentiment_mean/sum/std, relevance_mean, source_weight_mean, event_intensity,
+    news_count_change_24h, sentiment_momentum_24h, price_close, return_1d,
+    price_return_5d, rolling_volatility_20d, volume_zscore_20d
   - Dedupe: unique(ticker, window_end, window_hours)
 - market_labels
   - Supervised targets: target_up + future_return by horizon_days
   - Dedupe: unique(ticker, timestamp, horizon_days)
+- prediction_logs
+  - Inference audit rows: ticker, prediction, probability_up, confidence, model_version, window_end, created_at
 
 5) Key Modules
 - app/ingestion/news_api.py
-  - News API client + response parsing
+  - News API client + response parsing + paginated fetch with lookback window
 - app/ingestion/market_data.py
-  - yfinance download + normalization
+  - yfinance download + normalization with configurable period/interval
 - app/ingestion/pipeline.py
   - News + market ingestion jobs
 - app/nlp/pipeline.py
   - Ticker extraction + lexicon sentiment + relevance scoring
 - app/features/pipeline.py
-  - Feature aggregation + label generation
+  - Feature aggregation + label generation with expanded price/news momentum features
+- app/data_quality/checks.py
+  - Data status summary and quality diagnostics
 - app/api/routes.py
-  - Endpoints for health, ingestion, and pipeline run/status
+  - Endpoints for health, ingestion, pipeline run/status, full-run orchestration, model ops, prediction, logs, docs text, and data quality
 - app/db/session.py
   - DB engine/session config + postgres URL normalization
+- app/db/schema.py
+  - Runtime schema creation + safe column-add migration helper
 - app/models/dataset.py
   - Feature/label training dataset join + time split + latest feature lookup
 - app/models/train_baseline.py
   - Baseline model training, metrics, artifact persistence
 - app/models/inference.py
   - Artifact loading + per-ticker prediction
+- frontend/src/App.jsx
+  - Dashboard UI for operations, model/predict, data quality, and docs tabs
+- frontend/vite.config.js
+  - Local proxy from Vite dev server to FastAPI API
 
 6) API Endpoints
 - GET /health
@@ -86,6 +110,11 @@ TECHNICAL TERMS
 - POST /model/train
 - GET /model/status
 - GET /predict?ticker=NVDA
+- GET /data/status
+- GET /data/quality
+- POST /run/full?train_model=true
+- GET /prediction/logs?limit=100
+- GET /docs/text
 
 7) How to Run
 - Ingestion only:
@@ -101,27 +130,43 @@ TECHNICAL TERMS
   - scripts/smoke_api.ps1
   - scripts/run_feature_pipeline.ps1
   - scripts/run_model_training.ps1
+  - scripts/run_full_refresh.ps1
+  - scripts/show_data_checks.ps1
+  - scripts/predict_ticker.ps1
+- Frontend commands:
+  - cd frontend
+  - npm install
+  - npm run dev
 
 8) Model Artifacts
 - Stored in MODEL_ARTIFACTS_DIR (default ./artifacts)
-- baseline_model.joblib
-  - Serialized scikit-learn LogisticRegression model
-- baseline_metadata.json
-  - Feature columns, train/validation metrics, creation timestamp
-  - Includes train_classes and model_type; can be dummy_most_frequent when training data has one class
+- baseline_model.joblib / baseline_metadata.json
+  - Latest pointers for active model and metadata
+- baseline_model_<version>.joblib / baseline_metadata_<version>.json
+  - Immutable versioned artifacts
+- current_model.json
+  - Active model manifest (version_id + artifact paths)
 
 9) Current State
 - End-to-end flow is implemented and runnable.
 - Data has been successfully written to PostgreSQL.
 - Feature/label generation works after ingestion data is available.
 - Baseline model training and prediction endpoints are implemented.
-- Current training data is small/imbalanced, so baseline may use DummyClassifier fallback until more varied data is collected.
+- Expanded feature generation now creates market-day snapshots (not only news-timestamp rows), which materially increased training set size.
+- Baseline training now runs with LogisticRegression on current dataset and records walk-forward metrics plus baseline comparisons.
+- Ingestion now supports larger backfills through environment settings:
+  - NEWS_PAGE_SIZE, NEWS_MAX_PAGES, NEWS_LOOKBACK_DAYS
+  - MARKET_HISTORY_PERIOD, MARKET_HISTORY_INTERVAL, MARKET_TICKERS
+- Data quality/status endpoints are implemented.
+- Prediction logs are persisted.
+- Confidence-threshold hold mode is implemented via PREDICT_HOLD_THRESHOLD.
+- React dashboard is implemented with one-click operations and embedded documentation views.
 
 10) Next Technical Milestone
 - Improve model quality and robustness:
+  - integrate large free historical news source (e.g., GDELT subset strategy)
   - richer NLP/entity mapping
-  - more features (volume spikes, lagged returns, rolling volatility)
-  - larger historical data window
+  - larger balanced training distribution
   - walk-forward validation/backtest
   - risk controls for signal consumption
 
@@ -138,7 +183,9 @@ What this project does right now:
 - It groups those scores into clean rows for AI training.
 - It creates the correct answers from real future prices (did price go up or down?).
 - It trains a first basic model from that prepared data.
-- It can give a prediction (up/down + confidence) for a ticker using latest features.
+- It can give a prediction (up/down/hold + confidence) for a ticker using latest features.
+- It checks data health and keeps a log of prediction calls.
+- It has a frontend dashboard so operators can run and monitor pipeline stages without terminal commands.
 
 Think of it like a factory line:
 1) Collect raw material (news + prices)
@@ -150,7 +197,7 @@ What is NOT done yet:
 - Advanced model quality and full trading strategy validation are not done yet.
 
 Next simple step:
-- Improve the model with more data and better features so predictions are more useful.
+- Add a large free historical news source and retrain to move out of tiny-sample behavior.
 
 ==================================================
 UPDATE RULE

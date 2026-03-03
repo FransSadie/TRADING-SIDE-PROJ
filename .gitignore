@@ -8,3 +8,5 @@ __pycache__/
 .idea/
 .vscode/
 artifacts/
+frontend/node_modules/
+frontend/dist/

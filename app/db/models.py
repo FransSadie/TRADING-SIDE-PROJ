@@ -59,6 +59,8 @@ class NewsSignal(Base):
     ticker: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     sentiment_score: Mapped[float] = mapped_column(Float, nullable=False)
     relevance_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    source_weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    event_tags: Mapped[str | None] = mapped_column(String(256), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
@@ -76,8 +78,15 @@ class FeatureSnapshot(Base):
     sentiment_sum: Mapped[float | None] = mapped_column(Float, nullable=True)
     sentiment_std: Mapped[float | None] = mapped_column(Float, nullable=True)
     relevance_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_weight_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    event_intensity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    news_count_change_24h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sentiment_momentum_24h: Mapped[float | None] = mapped_column(Float, nullable=True)
     price_close: Mapped[float | None] = mapped_column(Float, nullable=True)
     return_1d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_return_5d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rolling_volatility_20d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volume_zscore_20d: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 
@@ -92,3 +101,16 @@ class MarketLabel(Base):
     target_up: Mapped[int] = mapped_column(Integer, nullable=False)
     future_return: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class PredictionLog(Base):
+    __tablename__ = "prediction_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    prediction: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    probability_up: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    model_version: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    window_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False, index=True)
