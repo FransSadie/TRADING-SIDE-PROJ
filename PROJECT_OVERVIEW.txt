@@ -1,5 +1,5 @@
 PROJECT OVERVIEW (LIVING DOCUMENT)
-Last updated: 2026-03-03 (frontend UX polish + npm shortcuts)
+Last updated: 2026-03-23 (historical refresh + GKG/NLP improvements)
 
 ==================================================
 TECHNICAL TERMS
@@ -20,10 +20,12 @@ TECHNICAL TERMS
 - Coverage controls (env-driven):
   - News paging and recency window
   - Market history period and ticker universe
+  - Historical news batch directory/format/limit
 
 3) Core Data Flow
 - Ingestion layer:
   - News API articles -> news_articles
+  - Historical batch files -> news_articles
   - Yahoo OHLCV rows -> market_prices
   - Every job run logged -> ingestion_runs
 - NLP layer:
@@ -51,7 +53,8 @@ TECHNICAL TERMS
 
 4) Tables and Their Roles
 - news_articles
-  - Raw article payload storage (title, description, content, source, url, published_at, tickers)
+  - Raw article payload storage (title, description, content, source, url, published_at, tickers,
+    source_type, external_id, import_batch, metadata_text, source_hash, nlp_source_hash, nlp_processed_at)
   - Dedupe: unique(source_name, url)
 - market_prices
   - OHLCV rows per ticker/timestamp/interval
@@ -76,14 +79,27 @@ TECHNICAL TERMS
 5) Key Modules
 - app/ingestion/news_api.py
   - News API client + response parsing + paginated fetch with lookback window
+- app/ingestion/historical_news.py
+  - Historical batch importer for normalized csv/jsonl files
+  - Reruns now refresh existing historical_batch rows instead of only skipping duplicates
+- app/ingestion/gdelt_gkg_normalizer.py
+  - Converts raw GDELT GKG zip/csv/txt/tsv files into normalized importer-ready csv files
+  - Produces cleaner synthesized title/description/content from themes, organizations, persons, counts, and tone
 - app/ingestion/market_data.py
   - yfinance download + normalization with configurable period/interval
 - app/ingestion/pipeline.py
   - News + market ingestion jobs
+  - News ingestion now stores a stable source hash for incremental NLP processing
+- app/ingestion/run_historical_import.py
+  - CLI entrypoint for historical news import
+- app/ingestion/run_gdelt_normalize.py
+  - CLI entrypoint for raw GDELT GKG normalization
 - app/nlp/pipeline.py
   - Ticker extraction + lexicon sentiment + relevance scoring
+  - Now parses structured GKG payloads, applies broader alias/theme matching, attaches macro/tech articles to market proxy tickers (SPY/QQQ) more aggressively, refreshes existing signal rows on rerun, applies stricter noise filtering plus minimum relevance thresholds for historical rows, and processes only new/changed articles in batches using source hashes
 - app/features/pipeline.py
   - Feature aggregation + label generation with expanded price/news momentum features
+  - Now refreshes existing feature rows when newer signals land inside an already-built window
 - app/data_quality/checks.py
   - Data status summary and quality diagnostics
 - app/api/routes.py
@@ -106,6 +122,8 @@ TECHNICAL TERMS
 6) API Endpoints
 - GET /health
 - POST /ingest/run
+- POST /ingest/historical/run
+- POST /normalize/gdelt/run
 - GET /ingest/status
 - POST /pipeline/run
 - GET /pipeline/status
@@ -130,6 +148,8 @@ TECHNICAL TERMS
 - PowerShell helpers:
   - scripts/start_api.ps1
   - scripts/smoke_api.ps1
+  - scripts/run_historical_import.ps1
+  - scripts/run_gdelt_normalize.ps1
   - scripts/run_feature_pipeline.ps1
   - scripts/run_model_training.ps1
   - scripts/run_full_refresh.ps1
@@ -162,6 +182,19 @@ TECHNICAL TERMS
 - Ingestion now supports larger backfills through environment settings:
   - NEWS_PAGE_SIZE, NEWS_MAX_PAGES, NEWS_LOOKBACK_DAYS
   - MARKET_HISTORY_PERIOD, MARKET_HISTORY_INTERVAL, MARKET_TICKERS
+- Historical batch import path is prepared:
+  - HISTORICAL_NEWS_DIR, HISTORICAL_NEWS_FORMAT, HISTORICAL_NEWS_BATCH_LIMIT
+  - normalized csv/jsonl import into news_articles
+- Raw GDELT GKG normalization path is now prepared:
+  - GDELT_GKG_RAW_DIR, GDELT_GKG_NORMALIZED_DIR, GDELT_GKG_BATCH_LIMIT, GDELT_GKG_ROW_LIMIT
+  - raw GKG files are converted into normalized csv files before historical import
+- Current observed bottleneck after the first 50-file GKG batch:
+  - many more historical rows and signals are now loading correctly
+  - broad market proxy signal coverage has improved materially at the NewsSignal layer
+  - but only a small number of feature rows currently end up with non-zero news_count because the current GKG test batch covers a narrow time slice
+  - this means the next improvement area is broader time coverage across more historical dates, not just better per-article mapping
+- Performance improvement milestone added:
+  - NLP is being shifted away from full-corpus reruns toward incremental processing using source hashes and processed markers
 - Data quality/status endpoints are implemented.
 - Prediction logs are persisted.
 - Confidence-threshold hold mode is implemented via PREDICT_HOLD_THRESHOLD.
@@ -202,7 +235,7 @@ What is NOT done yet:
 - Advanced model quality and full trading strategy validation are not done yet.
 
 Next simple step:
-- Add a large free historical news source and retrain to move out of tiny-sample behavior.
+- Put raw GDELT GKG files into data/gdelt_gkg_raw, run the GKG normalizer, then import the normalized batch and rerun NLP/features/training.
 
 ==================================================
 UPDATE RULE

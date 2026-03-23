@@ -17,6 +17,8 @@ from app.db.models import (
 )
 from app.db.session import get_db_session
 from app.features.pipeline import run_feature_generation, run_label_generation
+from app.ingestion.gdelt_gkg_normalizer import normalize_gdelt_gkg_batch
+from app.ingestion.historical_news import run_historical_news_import
 from app.ingestion.pipeline import run_all_ingestion
 from app.models.inference import log_prediction, predict_for_ticker
 from app.models.train_baseline import train_and_save_baseline
@@ -33,6 +35,16 @@ def health() -> dict:
 @router.post("/ingest/run")
 def ingest_run() -> dict:
     return run_all_ingestion()
+
+
+@router.post("/ingest/historical/run")
+def ingest_historical_run() -> dict:
+    return run_historical_news_import()
+
+
+@router.post("/normalize/gdelt/run")
+def normalize_gdelt_run() -> dict:
+    return normalize_gdelt_gkg_batch()
 
 
 @router.get("/ingest/status")

@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     news_page_size: int = Field(default=50, alias="NEWS_PAGE_SIZE")
     news_max_pages: int = Field(default=3, alias="NEWS_MAX_PAGES")
     news_lookback_days: int = Field(default=7, alias="NEWS_LOOKBACK_DAYS")
+    historical_news_dir: str = Field(default="./data/historical_news", alias="HISTORICAL_NEWS_DIR")
+    historical_news_format: str = Field(default="csv", alias="HISTORICAL_NEWS_FORMAT")
+    historical_news_batch_limit: int = Field(default=0, alias="HISTORICAL_NEWS_BATCH_LIMIT")
+    gdelt_gkg_raw_dir: str = Field(default="./data/gdelt_gkg_raw", alias="GDELT_GKG_RAW_DIR")
+    gdelt_gkg_normalized_dir: str = Field(default="./data/historical_news", alias="GDELT_GKG_NORMALIZED_DIR")
+    gdelt_gkg_batch_limit: int = Field(default=0, alias="GDELT_GKG_BATCH_LIMIT")
+    gdelt_gkg_row_limit: int = Field(default=0, alias="GDELT_GKG_ROW_LIMIT")
 
     market_tickers: str = Field(default="AAPL,MSFT,NVDA,SPY,QQQ", alias="MARKET_TICKERS")
     market_history_period: str = Field(default="1y", alias="MARKET_HISTORY_PERIOD")

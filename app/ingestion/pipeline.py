@@ -5,6 +5,7 @@ from typing import Iterable
 
 from sqlalchemy import select
 
+from app.core.article_hash import build_article_source_hash
 from app.core.config import get_settings
 from app.db.models import IngestionRun, MarketPrice, NewsArticle
 from app.db.session import get_db_session
@@ -86,6 +87,13 @@ def run_news_ingestion() -> int:
                     url=url[:2048],
                     published_at=parse_published_at(article.get("publishedAt")),
                     tickers=_extract_tickers(combined_text, ticker_universe),
+                    source_hash=build_article_source_hash(
+                        source_name=source_name,
+                        title=title,
+                        description=article.get("description"),
+                        content=article.get("content"),
+                        url=url,
+                    ),
                 )
                 session.add(model)
                 inserted += 1

@@ -28,6 +28,14 @@ def ensure_schema() -> None:
     Base.metadata.create_all(bind=engine)
 
     # Lightweight runtime migration path for existing DBs.
+    _add_column_if_missing("news_articles", "source_type", "VARCHAR(64) DEFAULT 'live_api'")
+    _add_column_if_missing("news_articles", "external_id", "VARCHAR(255)")
+    _add_column_if_missing("news_articles", "import_batch", "VARCHAR(255)")
+    _add_column_if_missing("news_articles", "metadata_text", "TEXT")
+    _add_column_if_missing("news_articles", "source_hash", "VARCHAR(64)")
+    _add_column_if_missing("news_articles", "nlp_source_hash", "VARCHAR(64)")
+    _add_column_if_missing("news_articles", "nlp_processed_at", "TIMESTAMP")
+
     _add_column_if_missing("news_signals", "source_weight", "DOUBLE PRECISION DEFAULT 1.0")
     _add_column_if_missing("news_signals", "event_tags", "VARCHAR(256)")
 

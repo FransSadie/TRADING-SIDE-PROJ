@@ -19,6 +19,13 @@ class NewsArticle(Base):
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     tickers: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False, default="live_api", index=True)
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    import_batch: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    metadata_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    nlp_source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    nlp_processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 

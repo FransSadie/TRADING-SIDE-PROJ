@@ -39,6 +39,7 @@ def _finish_run(run_id: int, status: str, rows_inserted: int, message: str | Non
 def run_feature_generation(window_hours: int = 24) -> int:
     run = _start_run("feature_generation")
     inserted = 0
+    updated = 0
     try:
         session = get_db_session()
         try:
@@ -76,15 +77,15 @@ def run_feature_generation(window_hours: int = 24) -> int:
                     existing_row = existing_map.get(feature_key)
                     if feature_key in pending_keys:
                         continue
-                    if existing_row and not _needs_feature_backfill(existing_row):
+                    window_start = window_end - timedelta(hours=window_hours)
+                    in_window = _signals_in_window(ticker_signals, window_start, window_end)
+                    if existing_row and not _should_refresh_feature_row(existing_row, in_window):
                         prev_tracker[ticker] = {
                             "news_count": float(existing_row.news_count),
                             "sentiment_mean": existing_row.sentiment_mean,
                         }
                         continue
 
-                    window_start = window_end - timedelta(hours=window_hours)
-                    in_window = _signals_in_window(ticker_signals, window_start, window_end)
                     sentiments = [item.sentiment_score for item in in_window]
                     relevances = [item.relevance_score for item in in_window]
                     weights = [item.source_weight for item in in_window]
@@ -107,6 +108,7 @@ def run_feature_generation(window_hours: int = 24) -> int:
 
                     if existing_row:
                         row = existing_row
+                        updated += 1
                     else:
                         row = FeatureSnapshot(ticker=ticker, window_end=window_end, window_hours=window_hours)
                         session.add(row)
@@ -131,8 +133,8 @@ def run_feature_generation(window_hours: int = 24) -> int:
             session.commit()
         finally:
             session.close()
-        _finish_run(run.id, "success", inserted, f"Inserted {inserted} feature rows")
-        logger.info("Feature generation complete: inserted=%s", inserted)
+        _finish_run(run.id, "success", inserted, f"Inserted {inserted} feature rows, updated {updated}")
+        logger.info("Feature generation complete: inserted=%s updated=%s", inserted, updated)
         return inserted
     except Exception as exc:
         _finish_run(run.id, "failed", inserted, str(exc))
@@ -281,6 +283,16 @@ def _needs_feature_backfill(row: FeatureSnapshot) -> bool:
             row.volume_zscore_20d,
         ]
     )
+
+
+def _should_refresh_feature_row(row: FeatureSnapshot, in_window: list[NewsSignal]) -> bool:
+    if _needs_feature_backfill(row):
+        return True
+    if not in_window:
+        return False
+    if row.created_at is None:
+        return True
+    return any(signal.created_at and signal.created_at > row.created_at for signal in in_window)
 
 
 def _mean(values: list[float]) -> float | None:

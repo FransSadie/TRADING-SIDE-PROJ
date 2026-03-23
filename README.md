@@ -27,6 +27,13 @@ Recommended coverage settings in `.env` for better model training:
 - `NEWS_PAGE_SIZE=100`
 - `NEWS_MAX_PAGES=3`
 - `NEWS_LOOKBACK_DAYS=7`
+- `HISTORICAL_NEWS_DIR=./data/historical_news`
+- `HISTORICAL_NEWS_FORMAT=csv`
+- `HISTORICAL_NEWS_BATCH_LIMIT=0`
+- `GDELT_GKG_RAW_DIR=./data/gdelt_gkg_raw`
+- `GDELT_GKG_NORMALIZED_DIR=./data/historical_news`
+- `GDELT_GKG_BATCH_LIMIT=0`
+- `GDELT_GKG_ROW_LIMIT=0`
 - `PREDICT_HOLD_THRESHOLD=0.6`
 
 ## 2) Run API + scheduler
@@ -86,6 +93,55 @@ Or test API endpoints (run in a second terminal while API is running):
 .\scripts\smoke_api.ps1
 ```
 
+Historical batch import:
+
+```bash
+python -m app.ingestion.run_historical_import
+```
+
+PowerShell helper:
+
+```powershell
+.\scripts\run_historical_import.ps1
+```
+
+Expected historical file schema for `csv`:
+- required: `title`, `url`
+- recommended: `published_at`, `source_name`, `description`, `content`, `external_id`
+- accepted aliases include:
+  - `headline` -> `title`
+  - `link` or `DocumentIdentifier` -> `url`
+  - `date` or `datetime` -> `published_at`
+  - `source` or `SourceCommonName` -> `source_name`
+
+Drop batch files into `data/historical_news/`.
+
+GDELT GKG normalization:
+
+```bash
+python -m app.ingestion.run_gdelt_normalize
+```
+
+PowerShell helper:
+
+```powershell
+.\scripts\run_gdelt_normalize.ps1
+```
+
+Workflow for raw GDELT GKG files:
+- drop raw `.zip`, `.csv`, `.txt`, or `.tsv` files into `data/gdelt_gkg_raw/`
+- run the normalizer
+- it writes importer-ready `.normalized.csv` files into `data/historical_news/`
+- then run the historical importer
+- rerunning the historical importer now refreshes existing `historical_batch` rows instead of only skipping duplicates
+
+Normalized GKG mapping:
+- `DocumentIdentifier` -> `url`
+- `SourceCommonName` -> `source_name`
+- `DATE` -> `published_at`
+- `GKGRECORDID` -> `external_id`
+- `title`, `description`, and `content` are synthesized from cleaned themes, organizations, persons, counts, and tone so the existing NLP pipeline has more usable text to process
+
 ## 5) Health check
 
 `GET http://127.0.0.1:8000/health`
@@ -109,6 +165,8 @@ API option (while server is running):
 - `GET /pipeline/status`
 - `GET /data/status`
 - `GET /data/quality`
+- `POST /ingest/historical/run`
+- `POST /normalize/gdelt/run`
 
 For larger historical backfills, run:
 
@@ -163,10 +221,17 @@ Prediction behavior:
 ## Data model
 
 - `news_articles`: raw article records + extracted tickers
+  - now also stores `source_type`, `external_id`, `import_batch`, `metadata_text` for historical imports
+  - now also stores `source_hash`, `nlp_source_hash`, and `nlp_processed_at` so NLP can run incrementally
 - `market_prices`: OHLCV snapshots per ticker/interval
 - `ingestion_runs`: job-level audit trail
 - `news_signals`: per article/ticker sentiment + relevance rows
+- rerunning NLP now refreshes existing `news_signals` as well as inserting new ones
+- broad macro and tech-heavy articles can now attach more aggressively to market proxy tickers like `SPY` and `QQQ`
+- historical GKG rows now go through stricter noise filtering and minimum relevance thresholds before a ticker signal is kept
+- NLP now processes `news_articles` in batches and only for rows that are new or whose source hash changed
 - `feature_snapshots`: rolling aggregates per ticker/window, including price volatility and momentum features
+- feature generation now refreshes existing snapshot rows when newer signals arrive inside their time window
 - `market_labels`: horizon-based direction labels from future returns
 - `prediction_logs`: API prediction audit history (ticker, prediction, confidence, model version, timestamp)
 
