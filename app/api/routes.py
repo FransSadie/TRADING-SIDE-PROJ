@@ -22,6 +22,8 @@ from app.ingestion.historical_news import run_historical_news_import
 from app.ingestion.pipeline import run_all_ingestion
 from app.models.inference import log_prediction, predict_for_ticker
 from app.models.train_baseline import train_and_save_baseline
+from app.nlp.seed_article_hashes import seed_article_hashes
+from app.nlp.seed_nlp_markers import seed_nlp_markers
 from app.nlp.pipeline import run_news_nlp
 
 router = APIRouter()
@@ -77,6 +79,16 @@ def pipeline_run() -> dict:
         "feature_rows_inserted": feature_count,
         "labels_inserted": label_count,
     }
+
+
+@router.post("/maintenance/seed-article-hashes")
+def maintenance_seed_article_hashes() -> dict:
+    return seed_article_hashes()
+
+
+@router.post("/maintenance/seed-nlp-markers")
+def maintenance_seed_nlp_markers() -> dict:
+    return seed_nlp_markers()
 
 
 @router.post("/run/full")

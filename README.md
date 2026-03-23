@@ -1,4 +1,4 @@
-# Market News Bot (Ingestion + Baseline Model)
+# Market Lens (Ingestion + Baseline Model)
 
 This project starts with a data-ingestion foundation for:
 - News ingestion from News API
@@ -162,6 +162,8 @@ PowerShell helper:
 API option (while server is running):
 
 - `POST /pipeline/run`
+- `POST /maintenance/seed-article-hashes`
+- `POST /maintenance/seed-nlp-markers`
 - `GET /pipeline/status`
 - `GET /data/status`
 - `GET /data/quality`
@@ -213,6 +215,10 @@ Prediction behavior:
 
 - Full refresh + train:
   - `.\scripts\run_full_refresh.ps1`
+- Seed missing article hashes for incremental NLP:
+  - `.\scripts\seed_article_hashes.ps1`
+- Seed NLP processed markers from current article hashes:
+  - `.\scripts\seed_nlp_markers.ps1`
 - Data status/quality report:
   - `.\scripts\show_data_checks.ps1`
 - Local one-off prediction:
@@ -230,8 +236,10 @@ Prediction behavior:
 - broad macro and tech-heavy articles can now attach more aggressively to market proxy tickers like `SPY` and `QQQ`
 - historical GKG rows now go through stricter noise filtering and minimum relevance thresholds before a ticker signal is kept
 - NLP now processes `news_articles` in batches and only for rows that are new or whose source hash changed
+- one-time maintenance helpers can seed `source_hash` and `nlp_processed_at` / `nlp_source_hash` on existing corpora
 - `feature_snapshots`: rolling aggregates per ticker/window, including price volatility and momentum features
 - feature generation now refreshes existing snapshot rows when newer signals arrive inside their time window
+- feature generation now targets only market windows affected by recently NLP-processed articles instead of sweeping all windows on every run
 - `market_labels`: horizon-based direction labels from future returns
 - `prediction_logs`: API prediction audit history (ticker, prediction, confidence, model version, timestamp)
 

@@ -97,9 +97,14 @@ TECHNICAL TERMS
 - app/nlp/pipeline.py
   - Ticker extraction + lexicon sentiment + relevance scoring
   - Now parses structured GKG payloads, applies broader alias/theme matching, attaches macro/tech articles to market proxy tickers (SPY/QQQ) more aggressively, refreshes existing signal rows on rerun, applies stricter noise filtering plus minimum relevance thresholds for historical rows, and processes only new/changed articles in batches using source hashes
+- app/nlp/seed_article_hashes.py
+  - One-time helper that fills missing source hashes on historical/live articles so incremental NLP can skip unchanged rows
+- app/nlp/seed_nlp_markers.py
+  - One-time helper that marks the current corpus as NLP-processed using source hashes, so future NLP runs can be incremental immediately
 - app/features/pipeline.py
   - Feature aggregation + label generation with expanded price/news momentum features
   - Now refreshes existing feature rows when newer signals land inside an already-built window
+  - Now identifies affected windows from recently NLP-processed articles and rebuilds only those targets instead of scanning all market days
 - app/data_quality/checks.py
   - Data status summary and quality diagnostics
 - app/api/routes.py
@@ -126,6 +131,8 @@ TECHNICAL TERMS
 - POST /normalize/gdelt/run
 - GET /ingest/status
 - POST /pipeline/run
+- POST /maintenance/seed-article-hashes
+- POST /maintenance/seed-nlp-markers
 - GET /pipeline/status
 - POST /model/train
 - GET /model/status
@@ -151,6 +158,8 @@ TECHNICAL TERMS
   - scripts/run_historical_import.ps1
   - scripts/run_gdelt_normalize.ps1
   - scripts/run_feature_pipeline.ps1
+  - scripts/seed_article_hashes.ps1
+  - scripts/seed_nlp_markers.ps1
   - scripts/run_model_training.ps1
   - scripts/run_full_refresh.ps1
   - scripts/show_data_checks.ps1
@@ -195,6 +204,7 @@ TECHNICAL TERMS
   - this means the next improvement area is broader time coverage across more historical dates, not just better per-article mapping
 - Performance improvement milestone added:
   - NLP is being shifted away from full-corpus reruns toward incremental processing using source hashes and processed markers
+  - feature generation is being shifted toward affected-window rebuilds based on recently NLP-processed articles
 - Data quality/status endpoints are implemented.
 - Prediction logs are persisted.
 - Confidence-threshold hold mode is implemented via PREDICT_HOLD_THRESHOLD.

@@ -9,10 +9,10 @@ const tabs = [
 ];
 
 const STORAGE_KEYS = {
-  activeTab: "market_bot_active_tab",
-  ticker: "market_bot_ticker",
-  autoRefresh: "market_bot_auto_refresh",
-  refreshMs: "market_bot_refresh_ms"
+  activeTab: "market_lens_active_tab",
+  ticker: "market_lens_ticker",
+  autoRefresh: "market_lens_auto_refresh",
+  refreshMs: "market_lens_refresh_ms"
 };
 
 function fmtTime(value) {
@@ -229,7 +229,7 @@ export default function App() {
         <header className="mb-6 rounded-2xl border border-line bg-panel/70 p-5 shadow-glow">
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
-              <h1 className="font-display text-3xl font-semibold">Market Bot Control Deck</h1>
+              <h1 className="font-display text-3xl font-semibold">Market Lens Control Deck</h1>
               <p className="mt-1 text-sm text-mute">
                 Operate ingestion, pipeline, model training, prediction, and quality checks from one screen.
               </p>
