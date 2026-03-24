@@ -100,11 +100,30 @@ def run_feature_generation(window_hours: int = 24) -> int:
                 sentiments = [item.sentiment_score for item in in_window]
                 relevances = [item.relevance_score for item in in_window]
                 weights = [item.source_weight for item in in_window]
+                weighted_sentiments = [item.sentiment_score * max(item.relevance_score, 0.05) * item.source_weight for item in in_window]
                 event_intensity = _event_intensity(in_window)
+                positive_news_ratio = _ratio([value for value in sentiments if value > 0], sentiments)
+                negative_news_ratio = _ratio([value for value in sentiments if value < 0], sentiments)
+                source_diversity = _source_diversity(in_window)
+                news_count_72h = float(_count_signals_in_window(ticker_signals, window_end - timedelta(hours=72), window_end))
 
-                close_price, return_1d, price_return_5d, rolling_volatility_20d, volume_zscore_20d = _price_features(
-                    rows, idx
-                )
+                (
+                    close_price,
+                    return_1d,
+                    price_return_3d,
+                    price_return_5d,
+                    price_return_10d,
+                    price_return_20d,
+                    ma_gap_5d,
+                    ma_gap_20d,
+                    ma_crossover_5_20,
+                    range_pct_1d,
+                    atr_14_pct,
+                    rolling_volatility_20d,
+                    volatility_regime_60d,
+                    volume_zscore_20d,
+                    volume_change_5d,
+                ) = _price_features(rows, idx)
                 news_count = len(in_window)
                 sentiment_mean = _mean(sentiments)
                 previous = _previous_feature_state(ticker, rows, idx, existing_map, computed_states)
@@ -129,15 +148,32 @@ def run_feature_generation(window_hours: int = 24) -> int:
                 row.sentiment_sum = sum(sentiments) if sentiments else 0.0
                 row.sentiment_std = _std(sentiments)
                 row.relevance_mean = _mean(relevances)
+                row.max_relevance = max(relevances) if relevances else None
                 row.source_weight_mean = _mean(weights)
+                row.weighted_news_count = sum(max(item.relevance_score, 0.05) * item.source_weight for item in in_window) if in_window else 0.0
+                row.weighted_sentiment_sum = sum(weighted_sentiments) if weighted_sentiments else 0.0
+                row.positive_news_ratio = positive_news_ratio
+                row.negative_news_ratio = negative_news_ratio
+                row.source_diversity = source_diversity
+                row.news_count_72h = news_count_72h
                 row.event_intensity = event_intensity
                 row.news_count_change_24h = news_count_change
                 row.sentiment_momentum_24h = sentiment_momentum
                 row.price_close = close_price
                 row.return_1d = return_1d
+                row.price_return_3d = price_return_3d
                 row.price_return_5d = price_return_5d
+                row.price_return_10d = price_return_10d
+                row.price_return_20d = price_return_20d
+                row.ma_gap_5d = ma_gap_5d
+                row.ma_gap_20d = ma_gap_20d
+                row.ma_crossover_5_20 = ma_crossover_5_20
+                row.range_pct_1d = range_pct_1d
+                row.atr_14_pct = atr_14_pct
                 row.rolling_volatility_20d = rolling_volatility_20d
+                row.volatility_regime_60d = volatility_regime_60d
                 row.volume_zscore_20d = volume_zscore_20d
+                row.volume_change_5d = volume_change_5d
                 computed_states[(ticker, window_end)] = {"news_count": float(news_count), "sentiment_mean": sentiment_mean}
             session.commit()
         finally:
@@ -229,14 +265,29 @@ def _feature_target_rows(
         .order_by(NewsArticle.published_at.asc())
     ).scalars().all()
 
-    if not processed_articles:
+    target_keys: set[tuple[str, datetime]] = set()
+    if processed_articles:
+        intervals = [(published_at, published_at + timedelta(hours=window_hours)) for published_at in processed_articles]
+        for ticker, rows in price_index.items():
+            for price_row in rows:
+                if any(start <= price_row.timestamp <= end for start, end in intervals):
+                    target_keys.add((ticker, price_row.timestamp))
+
+    stale_rows = session.execute(
+        select(FeatureSnapshot)
+        .where(FeatureSnapshot.window_hours == window_hours)
+    ).scalars().all()
+    for row in stale_rows:
+        if _needs_feature_backfill(row):
+            target_keys.add((row.ticker, row.window_end))
+
+    if not target_keys:
         return []
 
-    intervals = [(published_at, published_at + timedelta(hours=window_hours)) for published_at in processed_articles]
     targets: list[_FeatureTarget] = []
     for ticker, rows in price_index.items():
         for idx, price_row in enumerate(rows):
-            if any(start <= price_row.timestamp <= end for start, end in intervals):
+            if (ticker, price_row.timestamp) in target_keys:
                 targets.append(_FeatureTarget(ticker=ticker, price_index=idx, window_end=price_row.timestamp))
     targets.sort(key=lambda item: (item.ticker, item.window_end))
     return targets
@@ -279,6 +330,19 @@ def _event_intensity(signals: list[NewsSignal]) -> float | None:
     return tagged / len(signals)
 
 
+def _count_signals_in_window(signals: list[NewsSignal], start: datetime, end: datetime) -> int:
+    return sum(1 for signal in signals if signal.published_at and start <= signal.published_at <= end)
+
+
+def _source_diversity(signals: list[NewsSignal]) -> float | None:
+    if not signals:
+        return None
+    weights = [signal.source_weight for signal in signals if signal.source_weight is not None]
+    if not weights:
+        return None
+    return len({round(weight, 3) for weight in weights}) / len(weights)
+
+
 def _build_price_index(prices: list[MarketPrice]) -> dict[str, list[MarketPrice]]:
     index: dict[str, list[MarketPrice]] = {}
     for row in prices:
@@ -291,37 +355,102 @@ def _build_price_index(prices: list[MarketPrice]) -> dict[str, list[MarketPrice]
 
 def _price_features(
     price_rows: list[MarketPrice], current_index: int
-) -> tuple[float | None, float | None, float | None, float | None, float | None]:
+) -> tuple[
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+]:
     if not price_rows:
-        return None, None, None, None, None
+        return (None,) * 15
     if current_index < 0 or current_index >= len(price_rows):
-        return None, None, None, None, None
+        return (None,) * 15
 
     current = price_rows[current_index]
     close_price = current.close
+
+    def price_return(days: int) -> float | None:
+        if close_price is None or close_price == 0 or current_index < days:
+            return None
+        prev_close = price_rows[current_index - days].close
+        if prev_close is None or prev_close == 0:
+            return None
+        return (close_price - prev_close) / prev_close
+
     next_return = None
     if close_price is not None and close_price != 0 and current_index + 1 < len(price_rows):
         next_close = price_rows[current_index + 1].close
         if next_close is not None:
             next_return = (next_close - close_price) / close_price
 
-    price_return_5d = None
-    if close_price is not None and close_price != 0 and current_index >= 5:
-        prev_close = price_rows[current_index - 5].close
-        if prev_close is not None and prev_close != 0:
-            price_return_5d = (close_price - prev_close) / prev_close
+    price_return_3d = price_return(3)
+    price_return_5d = price_return(5)
+    price_return_10d = price_return(10)
+    price_return_20d = price_return(20)
+
+    ma_5 = _window_mean([row.close for row in price_rows[max(0, current_index - 4): current_index + 1]])
+    ma_20 = _window_mean([row.close for row in price_rows[max(0, current_index - 19): current_index + 1]])
+    ma_gap_5d = ((close_price - ma_5) / ma_5) if close_price is not None and ma_5 not in (None, 0) else None
+    ma_gap_20d = ((close_price - ma_20) / ma_20) if close_price is not None and ma_20 not in (None, 0) else None
+    ma_crossover_5_20 = ((ma_5 - ma_20) / ma_20) if ma_5 not in (None, 0) and ma_20 not in (None, 0) else None
+
+    range_pct_1d = None
+    if current.high is not None and current.low is not None and close_price not in (None, 0):
+        range_pct_1d = (current.high - current.low) / close_price
+
+    true_ranges = []
+    start_idx = max(1, current_index - 13)
+    for i in range(start_idx, current_index + 1):
+        row = price_rows[i]
+        prev_close = price_rows[i - 1].close
+        if row.high is None or row.low is None or prev_close is None:
+            continue
+        true_ranges.append(max(row.high - row.low, abs(row.high - prev_close), abs(row.low - prev_close)))
+    atr_14 = _window_mean(true_ranges)
+    atr_14_pct = (atr_14 / close_price) if atr_14 is not None and close_price not in (None, 0) else None
 
     rolling_volatility_20d = None
+    return_history = []
     if current_index >= 20:
-        returns = []
         for i in range(current_index - 19, current_index + 1):
             prev = price_rows[i - 1].close if i - 1 >= 0 else None
             curr = price_rows[i].close
             if prev is not None and prev != 0 and curr is not None:
-                returns.append((curr - prev) / prev)
-        rolling_volatility_20d = _std(returns) if returns else None
+                return_history.append((curr - prev) / prev)
+        rolling_volatility_20d = _std(return_history) if return_history else None
+
+    vol_history = []
+    if current_index >= 40:
+        for end in range(current_index - 19, current_index + 1):
+            sub_returns = []
+            for i in range(max(1, end - 19), end + 1):
+                prev = price_rows[i - 1].close
+                curr = price_rows[i].close
+                if prev is not None and prev != 0 and curr is not None:
+                    sub_returns.append((curr - prev) / prev)
+            if sub_returns:
+                vol_history.append(_std(sub_returns))
+    volatility_regime_60d = None
+    if rolling_volatility_20d is not None and len([v for v in vol_history if v is not None]) >= 5:
+        clean_vols = [v for v in vol_history if v is not None]
+        avg_vol = _mean(clean_vols)
+        sd_vol = _std(clean_vols)
+        if avg_vol is not None and sd_vol is not None and sd_vol > 0:
+            volatility_regime_60d = (rolling_volatility_20d - avg_vol) / sd_vol
 
     volume_zscore_20d = None
+    volume_change_5d = None
     if current_index >= 20 and current.volume is not None:
         volumes = [price_rows[i].volume for i in range(current_index - 19, current_index + 1)]
         clean_volumes = [v for v in volumes if v is not None]
@@ -330,8 +459,28 @@ def _price_features(
             sd = _std(clean_volumes)
             if avg is not None and sd is not None and sd > 0:
                 volume_zscore_20d = (current.volume - avg) / sd
+    if current.volume is not None and current_index >= 5:
+        prev_volume = price_rows[current_index - 5].volume
+        if prev_volume not in (None, 0):
+            volume_change_5d = (current.volume - prev_volume) / prev_volume
 
-    return close_price, next_return, price_return_5d, rolling_volatility_20d, volume_zscore_20d
+    return (
+        close_price,
+        next_return,
+        price_return_3d,
+        price_return_5d,
+        price_return_10d,
+        price_return_20d,
+        ma_gap_5d,
+        ma_gap_20d,
+        ma_crossover_5_20,
+        range_pct_1d,
+        atr_14_pct,
+        rolling_volatility_20d,
+        volatility_regime_60d,
+        volume_zscore_20d,
+        volume_change_5d,
+    )
 
 
 def _latest_feature_tracker(rows: list[FeatureSnapshot]) -> dict[str, dict[str, float | None]]:
@@ -367,13 +516,30 @@ def _needs_feature_backfill(row: FeatureSnapshot) -> bool:
     return any(
         value is None
         for value in [
+            row.max_relevance,
             row.source_weight_mean,
+            row.weighted_news_count,
+            row.weighted_sentiment_sum,
+            row.positive_news_ratio,
+            row.negative_news_ratio,
+            row.source_diversity,
+            row.news_count_72h,
             row.event_intensity,
             row.news_count_change_24h,
             row.sentiment_momentum_24h,
+            row.price_return_3d,
             row.price_return_5d,
+            row.price_return_10d,
+            row.price_return_20d,
+            row.ma_gap_5d,
+            row.ma_gap_20d,
+            row.ma_crossover_5_20,
+            row.range_pct_1d,
+            row.atr_14_pct,
             row.rolling_volatility_20d,
+            row.volatility_regime_60d,
             row.volume_zscore_20d,
+            row.volume_change_5d,
         ]
     )
 
@@ -388,10 +554,23 @@ def _should_refresh_feature_row(row: FeatureSnapshot, in_window: list[NewsSignal
     return any(signal.created_at and signal.created_at > row.created_at for signal in in_window)
 
 
+def _window_mean(values: list[float | None]) -> float | None:
+    clean = [value for value in values if value is not None]
+    if not clean:
+        return None
+    return sum(clean) / len(clean)
+
+
 def _mean(values: list[float]) -> float | None:
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def _ratio(selected: list[float], total: list[float]) -> float | None:
+    if not total:
+        return None
+    return len(selected) / len(total)
 
 
 def _std(values: list[float]) -> float | None:
@@ -400,3 +579,4 @@ def _std(values: list[float]) -> float | None:
     avg = sum(values) / len(values)
     variance = sum((value - avg) ** 2 for value in values) / len(values)
     return variance ** 0.5
+

@@ -170,10 +170,19 @@ def run_market_ingestion() -> int:
         return inserted
 
 
-def run_all_ingestion() -> dict[str, int]:
-    news_count = run_news_ingestion()
+def run_active_ingestion() -> dict[str, int | bool]:
+    settings = get_settings()
+    news_count = run_news_ingestion() if settings.enable_news_pipeline else 0
     market_count = run_market_ingestion()
-    return {"news_inserted": news_count, "market_inserted": market_count}
+    return {
+        "news_inserted": news_count,
+        "market_inserted": market_count,
+        "news_enabled": settings.enable_news_pipeline,
+    }
+
+
+def run_all_ingestion() -> dict[str, int | bool]:
+    return run_active_ingestion()
 
 
 def _to_float(value: object) -> float | None:

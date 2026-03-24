@@ -1,12 +1,12 @@
 PROJECT OVERVIEW (LIVING DOCUMENT)
-Last updated: 2026-03-23 (historical refresh + GKG/NLP improvements)
+Last updated: 2026-03-24 (price-only upgrades + model history)
 
 ==================================================
 TECHNICAL TERMS
 ==================================================
 
 1) Purpose
-- Build a trading support pipeline that ingests news + market data, transforms raw inputs into ML-ready features, and creates labels for prediction modeling.
+- Build a trading support pipeline that focuses on price-based market prediction, while retaining the older news stack in the repo for comparison and future experiments.
 
 2) Current Architecture
 - Backend: FastAPI
@@ -15,8 +15,8 @@ TECHNICAL TERMS
 - DB target: PostgreSQL (URL normalized to postgresql+pg8000://), SQLite fallback supported
 - Scheduling: APScheduler
 - Data sources:
-  - News: News API (/v2/everything)
-  - Prices: Yahoo Finance via yfinance
+  - Active default: Prices via Yahoo Finance / yfinance
+  - Retained but disabled by default: News API (/v2/everything) and historical news imports
 - Coverage controls (env-driven):
   - News paging and recency window
   - Market history period and ticker universe
@@ -24,9 +24,8 @@ TECHNICAL TERMS
 
 3) Core Data Flow
 - Ingestion layer:
-  - News API articles -> news_articles
-  - Historical batch files -> news_articles
-  - Yahoo OHLCV rows -> market_prices
+  - Active default: Yahoo OHLCV rows -> market_prices
+  - Retained but disabled by default: News API articles -> news_articles, historical batch files -> news_articles
   - Every job run logged -> ingestion_runs
 - NLP layer:
   - Article text processed into per-article/per-ticker signals -> news_signals
@@ -40,7 +39,9 @@ TECHNICAL TERMS
   - Join features + labels by ticker/date
   - Time-ordered train/validation split
   - Logistic Regression baseline training (Dummy fallback for single-class training)
-  - Walk-forward evaluation + baseline comparisons (dummy + price-only)
+  - Active default feature set: price_only
+  - Walk-forward evaluation + baseline comparisons (dummy + alternate feature sets)
+  - Every retrain persisted to model_runs for UI-side history/comparison
   - Versioned model artifacts + current-model manifest
   - Predict endpoint uses latest feature row per ticker and confidence threshold hold mode
 - Observability layer:
@@ -66,15 +67,21 @@ TECHNICAL TERMS
   - Dedupe: unique(article_id, ticker)
 - feature_snapshots
   - Time-window aggregates for model inputs:
-    news_count, sentiment_mean/sum/std, relevance_mean, source_weight_mean, event_intensity,
-    news_count_change_24h, sentiment_momentum_24h, price_close, return_1d,
-    price_return_5d, rolling_volatility_20d, volume_zscore_20d
+    news_count, sentiment_mean/sum/std, relevance_mean, max_relevance, source_weight_mean,
+    weighted_news_count, weighted_sentiment_sum, positive_news_ratio, negative_news_ratio,
+    source_diversity, news_count_72h, event_intensity, news_count_change_24h,
+    sentiment_momentum_24h, price_close, return_1d, price_return_3d, price_return_5d,
+    price_return_10d, price_return_20d, ma_gap_5d, ma_gap_20d, ma_crossover_5_20,
+    range_pct_1d, atr_14_pct, rolling_volatility_20d, volatility_regime_60d,
+    volume_zscore_20d, volume_change_5d
   - Dedupe: unique(ticker, window_end, window_hours)
 - market_labels
   - Supervised targets: target_up + future_return by horizon_days
   - Dedupe: unique(ticker, timestamp, horizon_days)
 - prediction_logs
   - Inference audit rows: ticker, prediction, probability_up, confidence, model_version, window_end, created_at
+- model_runs
+  - Retrain history rows with feature set, horizon, threshold, core metrics, signal stats, and recommended hold threshold
 
 5) Key Modules
 - app/ingestion/news_api.py
@@ -88,8 +95,8 @@ TECHNICAL TERMS
 - app/ingestion/market_data.py
   - yfinance download + normalization with configurable period/interval
 - app/ingestion/pipeline.py
-  - News + market ingestion jobs
-  - News ingestion now stores a stable source hash for incremental NLP processing
+  - Active ingestion now honors ENABLE_NEWS_PIPELINE so this repo can run market-only by default
+  - News ingestion path remains available and still stores a stable source hash for incremental NLP processing
 - app/ingestion/run_historical_import.py
   - CLI entrypoint for historical news import
 - app/ingestion/run_gdelt_normalize.py
@@ -102,13 +109,13 @@ TECHNICAL TERMS
 - app/nlp/seed_nlp_markers.py
   - One-time helper that marks the current corpus as NLP-processed using source hashes, so future NLP runs can be incremental immediately
 - app/features/pipeline.py
-  - Feature aggregation + label generation with expanded price/news momentum features
+  - Feature aggregation + label generation with expanded multi-horizon price features, ATR/range, moving-average gaps, volatility regime, and volume-trend signals
   - Now refreshes existing feature rows when newer signals land inside an already-built window
   - Now identifies affected windows from recently NLP-processed articles and rebuilds only those targets instead of scanning all market days
 - app/data_quality/checks.py
   - Data status summary and quality diagnostics
 - app/api/routes.py
-  - Endpoints for health, ingestion, pipeline run/status, full-run orchestration, model ops, prediction, logs, docs text, and data quality
+  - Endpoints for health, ingestion, pipeline run/status, full-run orchestration, model ops, model history, prediction, logs, docs text, and data quality
 - app/db/session.py
   - DB engine/session config + postgres URL normalization
 - app/db/schema.py
@@ -117,6 +124,8 @@ TECHNICAL TERMS
   - Feature/label training dataset join + time split + latest feature lookup
 - app/models/train_baseline.py
   - Baseline model training, metrics, artifact persistence
+  - Now honors TRAINING_FEATURE_SET, TRAINING_HORIZON_DAYS, and TRAINING_TARGET_RETURN_THRESHOLD
+  - Persists each retrain to model_runs and computes hold-threshold strategy summaries
 - app/models/inference.py
   - Artifact loading + per-ticker prediction
 - frontend/src/App.jsx
@@ -136,6 +145,7 @@ TECHNICAL TERMS
 - GET /pipeline/status
 - POST /model/train
 - GET /model/status
+- GET /model/history?limit=20
 - GET /predict?ticker=NVDA
 - GET /data/status
 - GET /data/quality
@@ -183,11 +193,13 @@ TECHNICAL TERMS
 
 9) Current State
 - End-to-end flow is implemented and runnable.
+- This repo now defaults to a price-first operating mode (`ENABLE_NEWS_PIPELINE=false`, `TRAINING_FEATURE_SET=price_only`).
 - Data has been successfully written to PostgreSQL.
 - Feature/label generation works after ingestion data is available.
 - Baseline model training and prediction endpoints are implemented.
 - Expanded feature generation now creates market-day snapshots (not only news-timestamp rows), which materially increased training set size.
-- Baseline training now runs with LogisticRegression on current dataset and records walk-forward metrics plus baseline comparisons.
+- Feature backfills now target stale snapshot rows missing newly added columns, so richer snapshot definitions can be rolled out without forcing a full-table rebuild.
+- Baseline training now runs with scaled LogisticRegression on the active feature set, records walk-forward metrics plus baseline comparisons, and stores each run in model_runs.
 - Ingestion now supports larger backfills through environment settings:
   - NEWS_PAGE_SIZE, NEWS_MAX_PAGES, NEWS_LOOKBACK_DAYS
   - MARKET_HISTORY_PERIOD, MARKET_HISTORY_INTERVAL, MARKET_TICKERS
@@ -211,26 +223,25 @@ TECHNICAL TERMS
 - React dashboard is implemented with one-click operations and embedded documentation views.
 
 10) Next Technical Milestone
-- Improve model quality and robustness:
-  - integrate large free historical news source (e.g., GDELT subset strategy)
-  - richer NLP/entity mapping
-  - larger balanced training distribution
-  - walk-forward validation/backtest
-  - risk controls for signal consumption
+- Improve the price-only model quality and robustness:
+  - tune price features further now that multi-horizon returns and range/ATR signals are in place
+  - compare alternative target thresholds and horizons against the new model-history table
+  - add lightweight backtesting / paper-trade scoring
+  - keep the news stack parked unless it starts beating the price-only benchmark again
 
 ==================================================
 VERY SIMPLE TERMS
 ==================================================
 
 What this project does right now:
-- It fetches news.
 - It fetches stock prices.
-- It saves both in your database.
+- It saves them in your database.
+- It can still fetch news if re-enabled, but that is no longer the default path in this repo.
 - It keeps a log of each run so you can see if it worked.
 - It reads news text and gives each article a simple score (good/bad and how relevant it is).
 - It groups those scores into clean rows for AI training.
 - It creates the correct answers from real future prices (did price go up or down?).
-- It trains a first basic model from that prepared data.
+- It trains a price-focused model from that prepared data and keeps a digital history of every retrain.
 - It can give a prediction (up/down/hold + confidence) for a ticker using latest features.
 - It checks data health and keeps a log of prediction calls.
 - It has a frontend dashboard so operators can run and monitor pipeline stages without terminal commands.
@@ -245,7 +256,7 @@ What is NOT done yet:
 - Advanced model quality and full trading strategy validation are not done yet.
 
 Next simple step:
-- Put raw GDELT GKG files into data/gdelt_gkg_raw, run the GKG normalizer, then import the normalized batch and rerun NLP/features/training.
+- Improve the price features, retrain the price-only model, and validate it against the existing benchmark before adding more complexity.
 
 ==================================================
 UPDATE RULE

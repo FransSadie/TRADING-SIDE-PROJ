@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     ingest_interval_minutes: int = Field(default=15, alias="INGEST_INTERVAL_MINUTES")
     model_artifacts_dir: str = Field(default="./artifacts", alias="MODEL_ARTIFACTS_DIR")
     predict_hold_threshold: float = Field(default=0.6, alias="PREDICT_HOLD_THRESHOLD")
+    enable_news_pipeline: bool = Field(default=False, alias="ENABLE_NEWS_PIPELINE")
+    training_feature_set: str = Field(default="price_only", alias="TRAINING_FEATURE_SET")
+    training_horizon_days: int = Field(default=3, alias="TRAINING_HORIZON_DAYS")
+    training_target_return_threshold: float = Field(default=0.002, alias="TRAINING_TARGET_RETURN_THRESHOLD")
 
     @property
     def market_ticker_list(self) -> List[str]:

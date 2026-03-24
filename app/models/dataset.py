@@ -14,17 +14,34 @@ FEATURE_COLUMNS = [
     "sentiment_std",
     "sentiment_momentum_24h",
     "relevance_mean",
+    "max_relevance",
     "source_weight_mean",
+    "weighted_news_count",
+    "weighted_sentiment_sum",
+    "positive_news_ratio",
+    "negative_news_ratio",
+    "source_diversity",
+    "news_count_72h",
     "event_intensity",
     "price_close",
     "return_1d",
+    "price_return_3d",
     "price_return_5d",
+    "price_return_10d",
+    "price_return_20d",
+    "ma_gap_5d",
+    "ma_gap_20d",
+    "ma_crossover_5_20",
+    "range_pct_1d",
+    "atr_14_pct",
     "rolling_volatility_20d",
+    "volatility_regime_60d",
     "volume_zscore_20d",
+    "volume_change_5d",
 ]
 
 
-def load_training_dataframe(horizon_days: int = 1, window_hours: int = 24) -> pd.DataFrame:
+def load_training_dataframe(horizon_days: int = 1, window_hours: int = 24, target_return_threshold: float = 0.0) -> pd.DataFrame:
     session = get_db_session()
     try:
         feature_rows = session.execute(
@@ -44,15 +61,32 @@ def load_training_dataframe(horizon_days: int = 1, window_hours: int = 24) -> pd
                 "sentiment_sum": row.sentiment_sum,
                 "sentiment_std": row.sentiment_std,
                 "relevance_mean": row.relevance_mean,
+                "max_relevance": row.max_relevance,
                 "source_weight_mean": row.source_weight_mean,
+                "weighted_news_count": row.weighted_news_count,
+                "weighted_sentiment_sum": row.weighted_sentiment_sum,
+                "positive_news_ratio": row.positive_news_ratio,
+                "negative_news_ratio": row.negative_news_ratio,
+                "source_diversity": row.source_diversity,
+                "news_count_72h": row.news_count_72h,
                 "event_intensity": row.event_intensity,
                 "news_count_change_24h": row.news_count_change_24h,
                 "sentiment_momentum_24h": row.sentiment_momentum_24h,
                 "price_close": row.price_close,
                 "return_1d": row.return_1d,
+                "price_return_3d": row.price_return_3d,
                 "price_return_5d": row.price_return_5d,
+                "price_return_10d": row.price_return_10d,
+                "price_return_20d": row.price_return_20d,
+                "ma_gap_5d": row.ma_gap_5d,
+                "ma_gap_20d": row.ma_gap_20d,
+                "ma_crossover_5_20": row.ma_crossover_5_20,
+                "range_pct_1d": row.range_pct_1d,
+                "atr_14_pct": row.atr_14_pct,
                 "rolling_volatility_20d": row.rolling_volatility_20d,
+                "volatility_regime_60d": row.volatility_regime_60d,
                 "volume_zscore_20d": row.volume_zscore_20d,
+                "volume_change_5d": row.volume_change_5d,
             }
             for row in feature_rows
         ]
@@ -88,11 +122,11 @@ def load_training_dataframe(horizon_days: int = 1, window_hours: int = 24) -> pd
     )
     if merged.empty:
         return pd.DataFrame()
-    merged = merged.dropna(subset=["timestamp", "target_up", "future_return"])
+    merged = merged.dropna(subset=["timestamp", "future_return"])
 
     merged["window_end"] = pd.to_datetime(merged["window_end"])
     merged = merged.sort_values(by="window_end").reset_index(drop=True)
-    merged = merged.dropna(subset=["target_up"])
+    merged["target_up"] = (merged["future_return"] > float(target_return_threshold)).astype(int)
 
     for col in FEATURE_COLUMNS:
         merged[col] = pd.to_numeric(merged[col], errors="coerce")
@@ -134,14 +168,32 @@ def latest_feature_row_for_ticker(ticker: str, window_hours: int = 24) -> dict |
         "sentiment_sum": row.sentiment_sum,
         "sentiment_std": row.sentiment_std,
         "relevance_mean": row.relevance_mean,
+        "max_relevance": row.max_relevance,
         "source_weight_mean": row.source_weight_mean,
+        "weighted_news_count": row.weighted_news_count,
+        "weighted_sentiment_sum": row.weighted_sentiment_sum,
+        "positive_news_ratio": row.positive_news_ratio,
+        "negative_news_ratio": row.negative_news_ratio,
+        "source_diversity": row.source_diversity,
+        "news_count_72h": row.news_count_72h,
         "event_intensity": row.event_intensity,
         "news_count_change_24h": row.news_count_change_24h,
         "sentiment_momentum_24h": row.sentiment_momentum_24h,
         "price_close": row.price_close,
         "return_1d": row.return_1d,
+        "price_return_3d": row.price_return_3d,
         "price_return_5d": row.price_return_5d,
+        "price_return_10d": row.price_return_10d,
+        "price_return_20d": row.price_return_20d,
+        "ma_gap_5d": row.ma_gap_5d,
+        "ma_gap_20d": row.ma_gap_20d,
+        "ma_crossover_5_20": row.ma_crossover_5_20,
+        "range_pct_1d": row.range_pct_1d,
+        "atr_14_pct": row.atr_14_pct,
         "rolling_volatility_20d": row.rolling_volatility_20d,
+        "volatility_regime_60d": row.volatility_regime_60d,
         "volume_zscore_20d": row.volume_zscore_20d,
+        "volume_change_5d": row.volume_change_5d,
     }
     return data
+

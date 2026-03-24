@@ -97,6 +97,7 @@ export default function App() {
   const [ingestStatus, setIngestStatus] = useState(null);
   const [pipelineStatus, setPipelineStatus] = useState(null);
   const [modelStatus, setModelStatus] = useState(null);
+  const [modelHistory, setModelHistory] = useState([]);
   const [prediction, setPrediction] = useState(null);
   const [predictionLogs, setPredictionLogs] = useState([]);
   const [docs, setDocs] = useState({ readme_markdown: "", project_overview_text: "" });
@@ -147,6 +148,10 @@ export default function App() {
       api("/model/status").then((d) => {
         setModelStatus(d);
         setLastUpdated((prev) => ({ ...prev, modelStatus: now }));
+      }),
+      api("/model/history?limit=20").then((d) => {
+        setModelHistory(d.rows || []);
+        setLastUpdated((prev) => ({ ...prev, modelHistory: now }));
       }),
       api("/prediction/logs?limit=100").then((d) => {
         setPredictionLogs(d.rows || []);
@@ -219,6 +224,13 @@ export default function App() {
     });
   }, [predictionLogs, logTickerFilter, logPredFilter]);
 
+  const latestModelRun = modelHistory[0] || null;
+  const previousModelRun = modelHistory[1] || null;
+  const metricDelta = (current, previous) => {
+    if (current == null || previous == null) return null;
+    return Number(current) - Number(previous);
+  };
+
   const latestRunStatus = pipelineStatus?.latest_run?.status || ingestStatus?.latest_run?.status || "none";
   const statusTone =
     latestRunStatus === "success" ? "good" : latestRunStatus === "failed" ? "bad" : latestRunStatus === "running" ? "warn" : "ink";
@@ -231,7 +243,7 @@ export default function App() {
             <div>
               <h1 className="font-display text-3xl font-semibold">Market Lens Control Deck</h1>
               <p className="mt-1 text-sm text-mute">
-                Operate ingestion, pipeline, model training, prediction, and quality checks from one screen.
+                Operate the price-first pipeline, model training, prediction, and quality checks from one screen.
               </p>
             </div>
             <button
@@ -320,8 +332,8 @@ export default function App() {
                   }
                   title="POST /ingest/run"
                 >
-                  <div className="font-medium">Run Ingestion</div>
-                  <div className="text-xs text-mute">News + market pull</div>
+                  <div className="font-medium">Run Market Ingestion</div>
+                  <div className="text-xs text-mute">Market data pull (news path paused)</div>
                 </button>
                 <button
                   className="rounded-lg border border-line bg-bg/60 px-4 py-3 text-left hover:border-accent/70"
@@ -334,8 +346,8 @@ export default function App() {
                   }
                   title="POST /pipeline/run"
                 >
-                  <div className="font-medium">Run NLP + Features</div>
-                  <div className="text-xs text-mute">Signal, feature, label jobs</div>
+                  <div className="font-medium">Run Features + Labels</div>
+                  <div className="text-xs text-mute">Price snapshot + label jobs</div>
                 </button>
                 <button
                   className="rounded-lg border border-line bg-bg/60 px-4 py-3 text-left hover:border-accent/70"
@@ -365,7 +377,7 @@ export default function App() {
                   title="POST /run/full?train_model=true"
                 >
                   <div className="font-medium">Run Full Refresh</div>
-                  <div className="text-xs text-mute">Ingest {"->"} pipeline {"->"} train</div>
+                  <div className="text-xs text-mute">Market ingest {"->"} features {"->"} train</div>
                 </button>
               </div>
               <div className="mt-2 text-xs text-mute">
@@ -401,7 +413,71 @@ export default function App() {
         )}
 
         {activeTab === "model" && (
-          <section className="grid gap-6 lg:grid-cols-[1fr_1fr]">
+          <section className="space-y-6">
+            <div className="grid gap-3 md:grid-cols-4">
+              <StatCard
+                label="Accuracy vs Prev"
+                value={latestModelRun?.accuracy != null ? `${(latestModelRun.accuracy * 100).toFixed(2)}%` : "n/a"}
+                tone={(metricDelta(latestModelRun?.accuracy, previousModelRun?.accuracy) || 0) >= 0 ? "good" : "warn"}
+              />
+              <StatCard
+                label="F1 vs Prev"
+                value={latestModelRun?.f1 != null ? latestModelRun.f1.toFixed(3) : "n/a"}
+                tone={(metricDelta(latestModelRun?.f1, previousModelRun?.f1) || 0) >= 0 ? "good" : "warn"}
+              />
+              <StatCard
+                label="ROC AUC vs Prev"
+                value={latestModelRun?.roc_auc != null ? latestModelRun.roc_auc.toFixed(3) : "n/a"}
+                tone={(metricDelta(latestModelRun?.roc_auc, previousModelRun?.roc_auc) || 0) >= 0 ? "good" : "warn"}
+              />
+              <StatCard
+                label="Recommended Hold"
+                value={latestModelRun?.recommended_hold_threshold != null ? latestModelRun.recommended_hold_threshold.toFixed(2) : "n/a"}
+                tone="accent"
+              />
+            </div>
+
+            <div className="rounded-2xl border border-line bg-panel/70 p-5">
+              <h2 className="font-display text-xl">Model Run History</h2>
+              <div className="mt-2 text-xs text-mute">Updated: {fmtTime(lastUpdated.modelHistory)}</div>
+              <div className="mt-4 overflow-auto rounded-lg border border-line">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-bg/90 text-mute">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Run</th>
+                      <th className="px-3 py-2 text-left">Feature Set</th>
+                      <th className="px-3 py-2 text-right">Horizon</th>
+                      <th className="px-3 py-2 text-right">Accuracy</th>
+                      <th className="px-3 py-2 text-right">F1</th>
+                      <th className="px-3 py-2 text-right">ROC AUC</th>
+                      <th className="px-3 py-2 text-right">WF Acc</th>
+                      <th className="px-3 py-2 text-right">Signals</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {modelHistory.map((row) => (
+                      <tr key={row.version_id} className="border-t border-line/50">
+                        <td className="px-3 py-2">{row.created_at ? fmtTime(row.created_at) : row.version_id}</td>
+                        <td className="px-3 py-2">{row.training_feature_set}</td>
+                        <td className="px-3 py-2 text-right">{row.horizon_days}d</td>
+                        <td className="px-3 py-2 text-right">{row.accuracy != null ? row.accuracy.toFixed(3) : "-"}</td>
+                        <td className="px-3 py-2 text-right">{row.f1 != null ? row.f1.toFixed(3) : "-"}</td>
+                        <td className="px-3 py-2 text-right">{row.roc_auc != null ? row.roc_auc.toFixed(3) : "-"}</td>
+                        <td className="px-3 py-2 text-right">{row.walk_forward_accuracy != null ? row.walk_forward_accuracy.toFixed(3) : "-"}</td>
+                        <td className="px-3 py-2 text-right">{row.signals_count ?? "-"}</td>
+                      </tr>
+                    ))}
+                    {modelHistory.length === 0 && (
+                      <tr>
+                        <td className="px-3 py-4 text-mute" colSpan={8}>No model runs logged yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <section className="grid gap-6 lg:grid-cols-[1fr_1fr]">
             <div className="rounded-2xl border border-line bg-panel/70 p-5">
               <h2 className="font-display text-xl">Predict</h2>
               <div className="mt-3 flex gap-2">
@@ -487,6 +563,7 @@ export default function App() {
                 </table>
               </div>
             </div>
+          </section>
           </section>
         )}
 
